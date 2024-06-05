@@ -1,0 +1,56 @@
+import (
+	"chunk.um"
+)
+
+fn simpleInstruction(name: str, offset: uint): uint {
+	printf("%s\n", name)
+	return offset + 1
+}
+
+fn constantInstruction(name: str, c: ^chunk::Chunk, offset: uint): uint {
+	constant := c.code[offset + 1]
+	printf("%-16s %4d '", name, constant)
+	c.constants[constant].print()
+	printf("'\n")
+	return offset + 2
+}
+
+fn disassembleInstruction*(c: ^chunk::Chunk, offset: uint): uint {
+	printf("%04d ", offset)
+	if (offset > 0 &&
+	    c.lines[offset] == c.lines[offset - 1]) {
+		printf("   | ")
+	} else {
+		printf("%4d ", c.lines[offset])
+	}
+	
+	instruction := c.code[offset]
+	switch chunk::OpCode(instruction) {
+	case .Constant: return constantInstruction("OP_CONSTANT", c, offset)
+	case .Nil: return simpleInstruction("OP_NIL", offset)
+	case .True: return simpleInstruction("OP_TRUE", offset)
+	case .False: return simpleInstruction("OP_FALSE", offset)
+	case .Equal: return simpleInstruction("OP_EQUAL", offset)
+	case .Greater: return simpleInstruction("OP_GREATER", offset)
+	case .Less: return simpleInstruction("OP_LESS", offset)
+	case .Add: return simpleInstruction("OP_ADD", offset)
+	case .Subtract: return simpleInstruction("OP_SUBTRACT", offset)
+	case .Multiply: return simpleInstruction("OP_MULTIPLY", offset)
+	case .Divide: return simpleInstruction("OP_DIVIDE", offset)
+	case .Negate: return simpleInstruction("OP_NEGATE", offset)
+	case .Not: return simpleInstruction("OP_NOT", offset)
+	case .Return: return simpleInstruction("OP_RETURN", offset)
+	}
+
+	printf("Unknown opcode %d\n", instruction);
+	return offset + 1
+}
+
+fn disassembleChunk*(c: ^chunk::Chunk,  name: str) {
+	printf("== %s ==\n", name)
+	
+	offset := 0
+	for offset < c.length() {
+		offset = disassembleInstruction(c, offset)
+	}
+}

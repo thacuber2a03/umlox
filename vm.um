@@ -1,0 +1,181 @@
+import (
+	"std.um"
+
+	"chunk.um"
+	"value.um"
+	"common.um"
+	"debug.um"
+	"compiler.um"
+)
+
+type InterpretResult* = enum {
+	Ok
+	CompileError
+	RuntimeError
+}
+
+const STACK_MAX = 256
+
+type VM = struct {
+	chunk: ^chunk::Chunk
+	ip: uint
+	stack: [STACK_MAX]value::Value
+	stackTop: uint
+}
+
+var vm: VM
+
+fn resetStack() {
+	vm.stackTop = 0
+}
+
+fn runtimeError(msg: str): InterpretResult {
+	fprintf(std::stderr(), "%s\n", msg)
+
+	instruction := vm.ip - 1
+	line := vm.chunk.lines[instruction]
+	fprintf(std::stderr(), "[line %d] in script\n", line)
+	resetStack()
+
+	return .RuntimeError
+}
+
+fn push(v: value::Value) {
+	vm.stack[vm.stackTop] = v
+	vm.stackTop++
+}
+
+fn pop(): value::Value {
+	vm.stackTop--
+	return vm.stack[vm.stackTop]
+}
+
+fn peek(distance: int): ^value::Value {
+	return &vm.stack[vm.stackTop-1 - distance]
+}
+
+fn init*() {
+	resetStack()
+}
+
+fn free*() {
+
+}
+
+fn readByte(): uint8 {
+	b := vm.chunk.code[vm.ip]
+	vm.ip++
+	return b
+}
+
+fn readConstant(): value::Value {
+	return vm.chunk.constants[readByte()]
+}
+
+fn readOpCode(): chunk::OpCode {
+	return chunk::OpCode(readByte())
+}
+
+fn binaryOp(op: uint): InterpretResult {
+	if peek(0).valueType() != .Number ||
+	   peek(1).valueType() != .Number {
+		return runtimeError("Operands must be numbers.")
+	}
+
+	b := value::Number(pop())
+	a := value::Number(pop())
+	switch op {
+	case 0: push(a + b)
+	case 1: push(a - b)
+	case 2: push(a * b)
+	case 3:
+		if b == 0 { return runtimeError("Division by zero.") }
+		push(a / b)
+	}
+
+	return .Ok
+}
+
+fn comparisonOp(op: uint): InterpretResult {
+	if peek(0).valueType() != .Number ||
+	   peek(1).valueType() != .Number {
+		return runtimeError("Operands must be numbers.")
+	}
+
+	b := value::Number(pop())
+	a := value::Number(pop())
+	switch op {
+	case 0: push(value::Bool(a <  b))
+	case 1: push(value::Bool(a >  b))
+	}
+
+	return .Ok
+}
+
+fn run(): InterpretResult {
+	for true {
+		if common::DEBUG_TRACE_EXECUTION {
+			printf(" ")
+			for slot := 0; slot < vm.stackTop; slot++ {
+				printf("[ ")
+				vm.stack[slot].print()
+				printf(" ]")
+			}
+			printf("\n")
+			debug::disassembleInstruction(vm.chunk, vm.ip)
+		}
+
+		switch ins := readOpCode(); ins {
+		case .Constant: push(readConstant())
+		case .Nil: push(value::Nil{})
+		case .True: push(value::Bool(true))
+		case .False: push(value::Bool(false))
+
+		case .Less: comparisonOp(0)
+		case .Greater: comparisonOp(1)
+		
+		case .Equal:
+			b := pop()
+			a := pop()
+			push(value::Bool(value::equals(a, b)))
+
+		case .Add: if binaryOp(0) != .Ok { return .RuntimeError }
+		case .Subtract: if binaryOp(1) != .Ok { return .RuntimeError }
+		case .Multiply: if binaryOp(2) != .Ok { return .RuntimeError }
+		case .Divide: if binaryOp(3) != .Ok { return .RuntimeError }
+		case .Negate:
+			if peek(0).valueType() != .Number {
+				return runtimeError("Operand must be a number.")
+			}
+			
+			peek(0)^ = -value::Number(peek(0)^)
+
+		case .Not: push(value::Bool(pop().isFalsey()))
+
+		case .Return:
+			v := pop()
+			v.print()
+			printf("\n")
+			vm.chunk = null
+			return .Ok
+		}
+	}
+
+	return .RuntimeError // unreachable
+}
+
+fn interpret*(source: str): InterpretResult {
+	var c: chunk::Chunk
+	c.init()
+
+	if (!compiler::compile(source, &c)) {
+		return .CompileError
+	}
+
+	vm.chunk = &c
+	vm.ip = 0
+
+	res := run()
+	vm.chunk = null
+	return res
+}

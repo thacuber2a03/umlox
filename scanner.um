@@ -1,0 +1,202 @@
+type Scanner = struct {
+	source: str
+	start: uint
+	current: uint
+	line: uint
+}
+
+type TokenType* = enum {
+	LeftParen; RightParen
+	LeftBrace; RightBrace
+	Comma; Dot; Minus; Plus
+	Semicolon; Slash; Star
+
+	Bang; BangEqual
+	Equal; EqualEqual
+	Greater; GreaterEqual
+	Less; LessEqual
+
+	Identifier; String; Number
+
+	And; Class; Else; False
+	For; Fun; If; Nil; Or
+	Print; Return; Super; This
+	True; Var; While
+
+	Error; Eof
+}
+
+type Token* = struct {
+	type_: TokenType
+	lexeme: str
+	line: uint
+}
+
+var scanner: Scanner
+
+fn init*(source: str) {
+	scanner.source = source
+	scanner.start = 0
+	scanner.current = scanner.start
+	scanner.line = 1
+}
+
+fn isDigit(c: char): bool {
+	d := uint8(c)
+	return d >= uint8('0') && d <= uint8('9')
+}
+
+fn isAlpha(c: char): bool {
+	d := uint8(c)
+	return (d >= uint8('a') && d <= uint8('z')) ||
+	       (d >= uint8('A') && d <= uint8('Z')) ||
+		    c == '_'
+}
+
+fn isAtEnd(): bool {
+	return scanner.current >= len(scanner.source)
+}
+
+fn advance(): char {
+	scanner.current++
+	return scanner.source[scanner.current-1]
+}
+
+fn peek(): char {
+	if isAtEnd() { return '\0' }
+	return scanner.source[scanner.current]
+}
+
+fn peekNext(): char {
+	if isAtEnd() { return '\0' }
+	return scanner.source[scanner.current+1]
+}
+
+fn match(expected: char): bool {
+	if isAtEnd() { return false }
+	if peek() != expected { return false }
+	scanner.current++
+	return true
+}
+
+fn makeToken(type_: TokenType): Token {
+	var token: Token
+	token.type_ = type_
+	token.line = scanner.line
+	token.lexeme = slice(
+		scanner.source,
+		scanner.start, scanner.current
+	)
+	return token
+}	
+
+fn errorToken(msg: str): Token {
+	var token: Token
+	token.type_ = .Error
+	token.lexeme = msg
+	token.line = scanner.line
+	return token
+}
+
+fn skipWhitespace() {
+	for true {
+		switch c := peek(); c {
+		case '\n': scanner.line++; advance()
+		case ' ', '\r', '\t': advance()
+
+		case '/':
+			if peekNext() == '/' {
+				for peek() != '\n' && !isAtEnd() { advance() }
+			} else {
+				return
+			}
+
+		default: return
+		}
+	}
+}
+
+fn string(): Token {
+	for peek() != '"' && !isAtEnd() {
+		if peek() == '\n' { scanner.line++ }
+		advance()
+	}
+
+	if isAtEnd() { return errorToken("Unterminated string.") }
+	advance()
+	return makeToken(.String)
+}
+
+fn number(): Token {
+	for isDigit(peek()) { advance() }
+
+	if peek() == '.' && isDigit(peekNext()) {
+		advance()
+		for isDigit(peek()) { advance() }
+	}
+
+	return makeToken(.Number)
+}
+
+fn identifierType(): TokenType {
+	id := slice(
+		scanner.source,
+		scanner.start, scanner.current
+	)
+
+	if id == "and"    { return .And    }
+	if id == "class"  { return .Class  }
+	if id == "else"   { return .Else   }
+	if id == "false"  { return .False  }
+	if id == "for"    { return .For    }
+	if id == "fun"    { return .Fun    }
+	if id == "if"     { return .If     }
+	if id == "nil"    { return .Nil    }
+	if id == "or"     { return .Or     }
+	if id == "print"  { return .Print  }
+	if id == "return" { return .Return }
+	if id == "super"  { return .Super  }
+	if id == "this"   { return .This   }
+	if id == "true"   { return .True   }
+	if id == "var"    { return .Var    }
+	if id == "while"  { return .While  }
+
+	return .Identifier
+}
+
+fn identifier(): Token {
+	for isAlpha(peek()) || isDigit(peek()) { advance() }
+	return makeToken(identifierType())
+}
+
+fn scanToken*(): Token {
+	skipWhitespace()
+	scanner.start = scanner.current
+
+	if isAtEnd() { return makeToken(.Eof) }
+	
+	c := advance()
+	if isDigit(c) { return number() }
+	if isAlpha(c) { return identifier() }
+
+	switch c {
+	case '(': return makeToken(.LeftParen)
+	case ')': return makeToken(.RightParen)
+	case '{': return makeToken(.LeftBrace)
+	case '}': return makeToken(.RightBrace)
+	case ';': return makeToken(.Semicolon)
+	case ',': return makeToken(.Comma)
+	case '.': return makeToken(.Dot)
+	case '-': return makeToken(.Minus)
+	case '+': return makeToken(.Plus)
+	case '/': return makeToken(.Slash)
+	case '*': return makeToken(.Star)
+	case '!': return makeToken(match('=') ? TokenType.BangEqual    : TokenType.Bang)
+	case '=': return makeToken(match('=') ? TokenType.EqualEqual   : TokenType.Equal)
+	case '<': return makeToken(match('=') ? TokenType.LessEqual    : TokenType.Less)
+	case '>': return makeToken(match('=') ? TokenType.GreaterEqual : TokenType.Greater)
+	case '"': return string()
+	}
+
+	return errorToken("Unexpected character.")
+}

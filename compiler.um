@@ -1,0 +1,255 @@
+import (
+	"std.um"
+
+	"common.um"
+	"chunk.um"
+	"debug.um"
+	"scanner.um"
+	"value.um"
+)
+
+type Parser = struct {
+	current, previous: scanner::Token
+	hadError, panicMode: bool
+} 
+
+type Precedence = enum {
+	None = 0
+	Assignment = 1
+	Or = 2
+	And = 3
+	Equality = 4
+	Comparison = 5
+	Term = 6
+	Factor = 7
+	Unary = 8
+	Call = 9
+	Primary = 10
+}
+
+type ParseFn = fn()
+
+type ParseRule = struct {
+	prefix, infix: ParseFn
+	precedence: Precedence
+}
+
+var parser: Parser
+var compilingChunk: ^chunk::Chunk
+
+fn currentChunk(): ^chunk::Chunk { return compilingChunk }
+
+fn errorAt(token: ^scanner::Token, message: str) {
+	if parser.panicMode { return }
+	parser.panicMode = true
+
+	fprintf(std::stderr(), "[line %d] Error", token.line)
+
+	if token.type_ == .Eof {
+		fprintf(std::stderr(), " at end")
+	} else if token.type_ != .Error {
+		fprintf(std::stderr(), " at '%s'", token.lexeme)
+	}
+
+	fprintf(std::stderr(), ": %s\n", message)
+	parser.hadError = true
+}
+
+fn error(message: str) {
+	errorAt(&parser.previous, message)
+}
+
+fn errorAtCurrent(message: str) {
+	errorAt(&parser.current, message)
+}
+
+fn advance() {
+	parser.previous = parser.current
+
+	for true {
+		parser.current = scanner::scanToken()
+		if parser.current.type_ != .Error { break }
+
+		errorAtCurrent(parser.current.lexeme)
+	}
+}
+
+fn consume(type_: scanner::TokenType, message: str) {
+	if parser.current.type_ == type_ {
+		advance()
+		return
+	}
+
+	errorAtCurrent(message)
+}
+
+fn emitByte(byte: uint8) {
+	currentChunk().writeByte(byte, parser.previous.line)
+}
+
+fn emitOpCode(op: chunk::OpCode) {
+	currentChunk().writeOpCode(op, parser.previous.line)
+}
+
+fn emitOpAndByte(op: chunk::OpCode, byte: uint8) {
+	emitOpCode(op)
+	emitByte(byte)
+}
+
+fn emitOpCodes(op1: chunk::OpCode, op2: chunk::OpCode) {
+	emitOpCode(op1)
+	emitOpCode(op2)
+}
+
+fn emitReturn() {
+	emitOpCode(.Return)
+}
+
+fn makeConstant(v: value::Value): uint8 {
+	constant := currentChunk().addConstant(v)
+
+	if constant > 256 { // FIXME: UINT8_MAX
+		error("Too many constants in one chunk.")
+		return 0
+	}
+
+	return uint8(constant)
+}
+
+fn emitConstant(v: value::Value) {
+	emitOpAndByte(.Constant, makeConstant(v))
+}
+
+fn endCompiler() {
+	emitReturn()
+	if common::DEBUG_PRINT_CODE && !parser.hadError {
+		debug::disassembleChunk(currentChunk(), "code")
+	}
+}
+
+fn expression()
+fn getRule(type_: scanner::TokenType): ^ParseRule
+fn parsePrecedence(precedence: Precedence)
+
+fn binary() {
+	operatorType := parser.previous.type_
+	rule := getRule(operatorType)
+	parsePrecedence(Precedence(uint(rule.precedence) + 1))
+
+	switch operatorType {
+	case .BangEqual: emitOpCodes(.Equal, .Not)
+	case .EqualEqual: emitOpCode(.Equal)
+	case .Greater: emitOpCode(.Greater)
+	case .GreaterEqual: emitOpCodes(.Less, .Not)
+	case .Less: emitOpCode(.Less)
+	case .LessEqual: emitOpCodes(.Greater, .Not)
+
+	case .Plus:  emitOpCode(.Add)
+	case .Minus: emitOpCode(.Subtract)
+	case .Star:  emitOpCode(.Multiply)
+	case .Slash: emitOpCode(.Divide)
+	}
+}
+
+fn literal() {
+	switch parser.previous.type_ {
+	case .False: emitOpCode(.False)
+	case .Nil: emitOpCode(.Nil)
+	case .True: emitOpCode(.True)
+	}
+} 
+
+fn grouping() {
+	expression()
+	consume(.RightParen, "Expect ')' after expression.")
+}
+
+fn number() {
+	v := std::atof(parser.previous.lexeme)
+	emitConstant(value::Number(v))
+}
+
+fn unary() {
+	operatorType := parser.previous.type_
+
+	expression()
+
+	switch operatorType {
+	case .Minus: emitOpCode(.Negate)
+	case .Bang: emitOpCode(.Not)
+	}
+}
+
+var initedRules: bool = false
+var rules: [uint(scanner::TokenType.Eof)+1]ParseRule
+var hitUndef: bool = false
+fn undef() { error("Expect expression."); hitUndef = true }
+
+fn parsePrecedence(precedence: Precedence) {
+	advance()
+	getRule(parser.previous.type_).prefix()
+	if hitUndef { return }
+	hitUndef = false
+
+	for precedence <= getRule(parser.current.type_).precedence {
+		advance()
+		getRule(parser.previous.type_).infix()
+		if hitUndef { std::assert(false) }
+	}
+}
+
+fn getRule(type_: scanner::TokenType): ^ParseRule {
+	return &rules[uint(type_)]
+}
+
+fn expression() {
+	parsePrecedence(.Assignment)
+}
+
+fn initRules() {
+	for _, r^ in rules {
+		r.prefix = undef
+		r.infix = undef
+		r.precedence = .None
+	}
+
+	rules[uint(scanner::TokenType.LeftParen)].prefix = grouping
+	rules[uint(scanner::TokenType.Minus)] = {unary, binary, .Term}
+	rules[uint(scanner::TokenType.Plus)] = {undef, binary, .Term}
+	rules[uint(scanner::TokenType.Slash)] = {undef, binary, .Factor}
+	rules[uint(scanner::TokenType.Star)] = {undef, binary, .Factor}
+	rules[uint(scanner::TokenType.Number)].prefix = number
+	rules[uint(scanner::TokenType.Nil)].prefix = literal
+	rules[uint(scanner::TokenType.True)].prefix = literal
+	rules[uint(scanner::TokenType.False)].prefix = literal
+	rules[uint(scanner::TokenType.Bang)].prefix = unary
+	rules[uint(scanner::TokenType.BangEqual)] = {undef, binary, .Equality}
+	rules[uint(scanner::TokenType.EqualEqual)] = {undef, binary, .Equality}
+	rules[uint(scanner::TokenType.Greater)] = {undef, binary, .Comparison}
+	rules[uint(scanner::TokenType.GreaterEqual)] = {undef, binary, .Comparison}
+	rules[uint(scanner::TokenType.Less)] = {undef, binary, .Comparison}
+	rules[uint(scanner::TokenType.LessEqual)] = {undef, binary, .Comparison}
+
+	initedRules = true
+}
+
+fn compile*(source: str, c: ^chunk::Chunk): bool {
+	if !initedRules {
+		initRules()
+		initedRules = true
+	}
+
+	scanner::init(source)
+	compilingChunk = c
+
+	parser.hadError = false
+	parser.panicMode = false
+
+	advance()
+	expression()
+	consume(.Eof, "Expect end of expression.")
+	endCompiler()
+
+	compilingChunk = null
+	return !parser.hadError
+}

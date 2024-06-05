@@ -1,0 +1,50 @@
+import (
+	"value.um"
+)
+
+type OpCode* = enum {
+	Constant
+	Nil
+	True
+	False
+	Equal
+	Greater
+	Less
+	Add
+	Subtract
+	Multiply
+	Divide
+	Negate
+	Not
+	Return
+}
+
+type Chunk* = struct {
+	code: []uint8
+	constants: []value::Value
+	lines: []uint
+}
+
+fn (c: ^Chunk) init*() {
+	c.code = make([]uint8, 0)
+	c.constants = make([]value::Value, 0)
+	c.lines = make([]uint, 0)
+}
+
+// freeing is dealt with by just getting out of the scope
+
+fn (c: ^Chunk) writeByte*(byte: uint8, line: uint) {
+	c.code = append(c.code, byte)
+	c.lines = append(c.lines, line)
+}
+
+fn (c: ^Chunk) writeOpCode*(op: OpCode, line: uint) {
+	c.writeByte(uint8(op), line)
+}
+
+fn (c: ^Chunk) addConstant*(v: value::Value): uint {
+	c.constants = append(c.constants, v)
+	return len(c.constants) - 1
+}
+
+fn (c: ^Chunk) length*(): uint { return len(c.code) }

@@ -1,0 +1,64 @@
+import (
+	"std.um"
+	"chunk.um"
+	"debug.um"
+	"vm.um"
+)
+
+fn readLine(): (str, bool) {
+	var s: str
+	for true {
+		var c: char
+		b, e := std::fread(std::stdin(), &c)
+		if b == 0 {
+			std::assert(std::StdErr(e.code) == .eof)
+			return s, false
+		}
+		if c == '\n' { break }
+		s += c
+	}
+
+	return s, true
+}
+
+fn repl() {
+	for true {
+		printf("> ")
+
+		line, cont := readLine()
+		if !cont {
+			printf("\n")
+			break
+		}
+		vm::interpret(line)
+	}
+}
+
+fn runFile(path: str) {
+	f, e := std::fopen(path, "rb")
+	std::exitif(e)
+	source, e := std::freadall(f)
+	std::exitif(e)
+	std::fclose(f)
+
+	switch res := vm::interpret(source); res {
+	case .CompileError: exit(65)
+	case .RuntimeError: exit(70)
+	}
+}
+
+fn main() {
+	vm::init()
+
+	argc := std::argc()
+	if argc == 1 {
+		repl()
+	} else if argc == 2 {
+		runFile(std::argv(1))
+	} else {
+		fprintf(std::stderr(), "Usage: clox [path]")
+		exit(64)
+	}
+
+	vm::free()
+}

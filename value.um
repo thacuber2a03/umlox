@@ -1,0 +1,43 @@
+type ValueType* = enum {
+	Bool
+	Nil
+	Number
+}
+
+type Value* = interface {
+	valueType(): ValueType
+	print()
+	isFalsey(): bool
+	// sadly this isn't possible
+	// equals(v: Value): bool
+}
+
+type Bool* = bool
+
+fn (b: ^Bool) valueType*(): ValueType { return .Bool }
+fn (b: ^Bool) print*() { printf("%v", b^) }
+fn (b: ^Bool) isFalsey*(): bool { return !b^ }
+
+type Nil* = struct {}
+
+fn (n: ^Nil) valueType*(): ValueType { return .Nil }
+fn (n: ^Nil) print*() { printf("nil") }
+fn (n: ^Nil) isFalsey*(): bool { return true }
+
+type Number* = real
+
+fn (n: ^Number) valueType*(): ValueType { return .Number }
+fn (n: ^Number) print*() { printf("%g", n^) }
+fn (n: ^Number) isFalsey*(): bool { return false }
+
+fn equals*(a: Value, b: Value): bool {
+	if a.valueType() != b.valueType() { return false }
+
+	switch a.valueType() {
+	case .Bool: return Bool(a) == Bool(b)
+	case .Number: return Number(a) == Number(b)
+	case .Nil: return true
+	}
+
+	return false // should be unreachable
+}
