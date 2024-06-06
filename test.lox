@@ -1,4 +1,7 @@
-var breakfast = "beignets";
-var beverage = "café au lait";
-breakfast = breakfast + " with " + beverage;
-print breakfast;
+var a = 1;
+{
+	var b = 1 + 2;
+	var c = 4;
+	print b + c;
+}
+print a;

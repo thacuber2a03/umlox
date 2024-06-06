@@ -34,7 +34,18 @@ type ParseRule = struct {
 	precedence: Precedence
 }
 
+type Local = struct {
+	name: scanner::Token
+	depth: uint
+}
+
+type Compiler = struct {
+	locals: [common::UINT8_COUNT]Local
+	localCount, scopeDepth: int
+}
+
 var parser: Parser
+var current: ^Compiler = null
 var compilingChunk: ^chunk::Chunk
 
 fn currentChunk(): ^chunk::Chunk { return compilingChunk }
@@ -118,7 +129,7 @@ fn emitReturn() {
 fn makeConstant(v: value::Value): uint8 {
 	constant := currentChunk().addConstant(v)
 
-	if constant > 256 { // FIXME: UINT8_MAX
+	if constant > common::UINT8_MAX {
 		error("Too many constants in one chunk.")
 		return 0
 	}
@@ -130,10 +141,30 @@ fn emitConstant(v: value::Value) {
 	emitOpAndByte(.Constant, makeConstant(v))
 }
 
+fn (compiler: ^Compiler) init() {
+	compiler.localCount = 0
+	compiler.scopeDepth = 0
+	current = compiler
+}
+
 fn endCompiler() {
 	emitReturn()
 	if common::DEBUG_PRINT_CODE && !parser.hadError {
 		debug::disassembleChunk(currentChunk(), "code")
+	}
+}
+
+fn beginScope() { current.scopeDepth++ }
+
+fn endScope() {
+	current.scopeDepth--
+
+	// TODO: maybe optimize later
+	for current.localCount > 0 &&
+	    current.locals[current.localCount - 1].depth >
+	      current.scopeDepth {
+		emitOpCode(.Pop)
+		current.localCount--
 	}
 }
 
@@ -145,12 +176,74 @@ fn identifierConstant(name: ^scanner::Token): uint8 {
 	return makeConstant(value::String(name.lexeme))
 }
 
+fn identifiersEqual(a, b: ^scanner::Token): bool {
+	// yeah basically
+	return a == b || a.lexeme == b.lexeme
+}
+
+fn (c: ^Compiler) resolveLocal(name: ^scanner::Token): int {
+	for i := c.localCount - 1; i >= 0; i-- {
+		local := &c.locals[i]
+		if identifiersEqual(name, &local.name) {
+			if local.depth == -1 {
+				error("Can't read local variable in its own initializer.")
+			}
+
+			return i
+		}
+	}
+	return -1
+}
+
+fn addLocal(name: scanner::Token) {
+	if current.localCount == common::UINT8_COUNT {
+		error("Too many local variables in one function.")
+		return
+	}
+
+	local := &current.locals[current.localCount]
+	current.localCount++
+	local.name = name
+	local.depth = -1
+}
+
+fn declareVariable() {
+	if current.scopeDepth == 0 { return }
+
+	name := &parser.previous
+	for i := current.localCount - 1; i >= 0; i-- {
+		local := &current.locals[i]
+		if local.depth != -1 && local.depth < current.scopeDepth {
+			break
+		}
+
+		if identifiersEqual(name, &local.name) {
+			error("Already a variable with this name in this scope.")
+		}
+	}
+
+	addLocal(name^)
+}
+
 fn parseVariable(errorMessage: str): uint8 {
 	consume(.Identifier, errorMessage)
+
+	declareVariable()
+	if current.scopeDepth > 0 { return 0 }
+
 	return identifierConstant(&parser.previous)
 }
 
+fn markInitialized() {
+	current.locals[current.localCount-1].depth =
+		current.scopeDepth
+}
+
 fn defineVariable(global: uint8) {
+	if current.scopeDepth > 0 {
+		markInitialized()
+		return
+	}
 	emitOpAndByte(.DefineGlobal, global)
 }
 
@@ -198,13 +291,22 @@ fn string(_: bool) {
 }
 
 fn namedVariable(name: scanner::Token, canAssign: bool) {
-	arg := identifierConstant(&name)
+	var getOp, setOp: chunk::OpCode
+	arg := current.resolveLocal(&name)
+	if (arg != -1) {
+		getOp = .GetLocal
+		setOp = .SetLocal
+	} else {
+		arg = identifierConstant(&name)
+		getOp = .GetGlobal
+		setOp = .SetGlobal
+	}
 
 	if canAssign && match(.Equal) {
 		expression()
-		emitOpAndByte(.SetGlobal, arg)
+		emitOpAndByte(setOp, uint8(arg))
 	} else {
-		emitOpAndByte(.GetGlobal, arg)
+		emitOpAndByte(getOp, uint8(arg))
 	}
 }
 
@@ -254,6 +356,11 @@ fn expression() {
 	parsePrecedence(.Assignment)
 }
 
+fn block() {
+	for !check(.RightBrace) && !check(.Eof) { declaration() }
+	consume(.RightBrace, "Expect '}' after block.")
+}
+
 fn varDeclaration() {
 	global := parseVariable("Expect variable name.")
 
@@ -296,6 +403,10 @@ fn synchronize() {
 fn statement() {
 	if match(.Print) {
 		printStatement()
+	} else if match(.LeftBrace) {
+		beginScope()
+		block()
+		endScope()
 	} else {
 		expressionStatement()
 	}
@@ -347,6 +458,8 @@ fn compile*(source: str, c: ^chunk::Chunk): bool {
 	}
 
 	scanner::init(source)
+	var compiler: Compiler
+	compiler.init()
 	compilingChunk = c
 
 	parser.hadError = false
@@ -359,5 +472,6 @@ fn compile*(source: str, c: ^chunk::Chunk): bool {
 	endCompiler()
 
 	compilingChunk = null
+	current = null
 	return !parser.hadError
 }

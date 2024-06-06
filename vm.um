@@ -140,6 +140,8 @@ fn run(): InterpretResult {
 			}
 			push(vm.globals[name])
 
+		case .GetLocal: push(vm.stack[readByte()])
+
 		case .DefineGlobal:
 			name := value::String(readConstant())
 			vm.globals[name] = peek(0)^
@@ -151,6 +153,8 @@ fn run(): InterpretResult {
 				return runtimeError(sprintf("Undefined variable '%s'.", name))
 			}
 			vm.globals[name] = peek(0)^
+
+		case .SetLocal: vm.stack[readByte()] = peek(0)^
 
 		case .Less: comparisonOp(0)
 		case .Greater: comparisonOp(1)

@@ -8,8 +8,10 @@ type OpCode* = enum {
 	True
 	False
 	Pop
+	GetLocal
 	GetGlobal
 	DefineGlobal
+	SetLocal
 	SetGlobal
 	Equal
 	Greater
