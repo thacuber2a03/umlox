@@ -11,7 +11,7 @@ import (
 type Parser = struct {
 	current, previous: scanner::Token
 	hadError, panicMode: bool
-} 
+}
 
 type Precedence = enum {
 	None = 0
@@ -27,7 +27,7 @@ type Precedence = enum {
 	Primary = 10
 }
 
-type ParseFn = fn()
+type ParseFn = fn(canAssign: bool)
 
 type ParseRule = struct {
 	prefix, infix: ParseFn
@@ -83,6 +83,16 @@ fn consume(type_: scanner::TokenType, message: str) {
 	errorAtCurrent(message)
 }
 
+fn check(type_: scanner::TokenType): bool {
+	return parser.current.type_ == type_
+}
+
+fn match(type_: scanner::TokenType): bool {
+	if !check(type_) { return false }
+	advance()
+	return true
+}
+
 fn emitByte(byte: uint8) {
 	currentChunk().writeByte(byte, parser.previous.line)
 }
@@ -127,11 +137,24 @@ fn endCompiler() {
 	}
 }
 
-fn expression()
+fn expression(); fn statement(); fn declaration()
 fn getRule(type_: scanner::TokenType): ^ParseRule
 fn parsePrecedence(precedence: Precedence)
 
-fn binary() {
+fn identifierConstant(name: ^scanner::Token): uint8 {
+	return makeConstant(value::String(name.lexeme))
+}
+
+fn parseVariable(errorMessage: str): uint8 {
+	consume(.Identifier, errorMessage)
+	return identifierConstant(&parser.previous)
+}
+
+fn defineVariable(global: uint8) {
+	emitOpAndByte(.DefineGlobal, global)
+}
+
+fn binary(_: bool) {
 	operatorType := parser.previous.type_
 	rule := getRule(operatorType)
 	parsePrecedence(Precedence(uint(rule.precedence) + 1))
@@ -151,25 +174,45 @@ fn binary() {
 	}
 }
 
-fn literal() {
+fn literal(_: bool) {
 	switch parser.previous.type_ {
 	case .False: emitOpCode(.False)
 	case .Nil: emitOpCode(.Nil)
 	case .True: emitOpCode(.True)
 	}
-} 
+}
 
-fn grouping() {
+fn grouping(_: bool) {
 	expression()
 	consume(.RightParen, "Expect ')' after expression.")
 }
 
-fn number() {
+fn number(_: bool) {
 	v := std::atof(parser.previous.lexeme)
 	emitConstant(value::Number(v))
 }
 
-fn unary() {
+fn string(_: bool) {
+	emitConstant(value::String(
+		slice(parser.previous.lexeme, 1, len(parser.previous.lexeme)-1)))
+}
+
+fn namedVariable(name: scanner::Token, canAssign: bool) {
+	arg := identifierConstant(&name)
+
+	if canAssign && match(.Equal) {
+		expression()
+		emitOpAndByte(.SetGlobal, arg)
+	} else {
+		emitOpAndByte(.GetGlobal, arg)
+	}
+}
+
+fn variable(canAssign: bool) {
+	namedVariable(parser.previous, canAssign)
+}
+
+fn unary(_: bool) {
 	operatorType := parser.previous.type_
 
 	expression()
@@ -183,18 +226,23 @@ fn unary() {
 var initedRules: bool = false
 var rules: [uint(scanner::TokenType.Eof)+1]ParseRule
 var hitUndef: bool = false
-fn undef() { error("Expect expression."); hitUndef = true }
+fn undef(_: bool) { error("Expect expression."); hitUndef = true }
 
 fn parsePrecedence(precedence: Precedence) {
 	advance()
-	getRule(parser.previous.type_).prefix()
+	canAssign := precedence <= .Assignment
+	getRule(parser.previous.type_).prefix(canAssign)
 	if hitUndef { return }
 	hitUndef = false
 
 	for precedence <= getRule(parser.current.type_).precedence {
 		advance()
-		getRule(parser.previous.type_).infix()
+		getRule(parser.previous.type_).infix(canAssign)
 		if hitUndef { std::assert(false) }
+	}
+
+	if canAssign && match(.Equal) {
+		error("Invalid assignment target.")
 	}
 }
 
@@ -204,6 +252,63 @@ fn getRule(type_: scanner::TokenType): ^ParseRule {
 
 fn expression() {
 	parsePrecedence(.Assignment)
+}
+
+fn varDeclaration() {
+	global := parseVariable("Expect variable name.")
+
+	if match(.Equal) {
+		expression()
+	} else {
+		emitOpCode(.Nil)
+	}
+
+	consume(.Semicolon, "Expect ';' after variable declaration.")
+	defineVariable(global)
+}
+
+fn expressionStatement() {
+	expression()
+	consume(.Semicolon, "Expect ';' after expression.")
+	emitOpCode(.Pop)
+}
+
+fn printStatement() {
+	expression()
+	consume(.Semicolon, "Expect ';' after value.")
+	emitOpCode(.Print)
+}
+
+fn synchronize() {
+	parser.panicMode = false
+
+	for parser.current.type_ != .Eof {
+		if parser.previous.type_ == .Semicolon { return }
+		switch parser.current.type_ {
+		case .Class, .Fun, .Var, .For,
+		     .If, .While, .Print, .Return:
+			return
+		}
+		advance()
+	}
+}
+
+fn statement() {
+	if match(.Print) {
+		printStatement()
+	} else {
+		expressionStatement()
+	}
+}
+
+fn declaration() {
+	if match(.Var) {
+		varDeclaration()
+	} else {
+		statement()
+	}
+
+	if parser.panicMode { synchronize() }
 }
 
 fn initRules() {
@@ -229,6 +334,8 @@ fn initRules() {
 	rules[uint(scanner::TokenType.GreaterEqual)] = {undef, binary, .Comparison}
 	rules[uint(scanner::TokenType.Less)] = {undef, binary, .Comparison}
 	rules[uint(scanner::TokenType.LessEqual)] = {undef, binary, .Comparison}
+	rules[uint(scanner::TokenType.String)] = {string, undef, .None}
+	rules[uint(scanner::TokenType.Identifier)].prefix = variable
 
 	initedRules = true
 }
@@ -246,8 +353,9 @@ fn compile*(source: str, c: ^chunk::Chunk): bool {
 	parser.panicMode = false
 
 	advance()
-	expression()
-	consume(.Eof, "Expect end of expression.")
+
+	for !match(.Eof) { declaration() }
+
 	endCompiler()
 
 	compilingChunk = null

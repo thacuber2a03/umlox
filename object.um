@@ -1,0 +1,13 @@
+// TODO: stub
+
+import (
+	"value.um"
+)
+
+type ObjectType = enum {
+}
+
+type Object* = interface {
+	value::Value
+	objectType(): ObjectType
+}

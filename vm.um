@@ -21,6 +21,7 @@ type VM = struct {
 	ip: uint
 	stack: [STACK_MAX]value::Value
 	stackTop: uint
+	globals: map[str]value::Value
 }
 
 var vm: VM
@@ -56,6 +57,7 @@ fn peek(distance: int): ^value::Value {
 
 fn init*() {
 	resetStack()
+	vm.globals = make(map[str]value::Value)
 }
 
 fn free*() {
@@ -85,10 +87,9 @@ fn binaryOp(op: uint): InterpretResult {
 	b := value::Number(pop())
 	a := value::Number(pop())
 	switch op {
-	case 0: push(a + b)
-	case 1: push(a - b)
-	case 2: push(a * b)
-	case 3:
+	case 0: push(a - b)
+	case 1: push(a * b)
+	case 2:
 		if b == 0 { return runtimeError("Division by zero.") }
 		push(a / b)
 	}
@@ -130,34 +131,67 @@ fn run(): InterpretResult {
 		case .Nil: push(value::Nil{})
 		case .True: push(value::Bool(true))
 		case .False: push(value::Bool(false))
+		case .Pop: pop()
+
+		case .GetGlobal:
+			name := value::String(readConstant())
+			if !validkey(vm.globals, name) {
+				return runtimeError(sprintf("Undefined variable '%s'.", name))
+			}
+			push(vm.globals[name])
+
+		case .DefineGlobal:
+			name := value::String(readConstant())
+			vm.globals[name] = peek(0)^
+			pop()
+
+		case .SetGlobal:
+			name := value::String(readConstant())
+			if !validkey(vm.globals, name) {
+				return runtimeError(sprintf("Undefined variable '%s'.", name))
+			}
+			vm.globals[name] = peek(0)^
 
 		case .Less: comparisonOp(0)
 		case .Greater: comparisonOp(1)
-		
+
 		case .Equal:
-			b := pop()
-			a := pop()
+			b, a := pop(), pop()
 			push(value::Bool(value::equals(a, b)))
 
-		case .Add: if binaryOp(0) != .Ok { return .RuntimeError }
-		case .Subtract: if binaryOp(1) != .Ok { return .RuntimeError }
-		case .Multiply: if binaryOp(2) != .Ok { return .RuntimeError }
-		case .Divide: if binaryOp(3) != .Ok { return .RuntimeError }
+		case .Add:
+			b, a := pop(), pop()
+
+			if a.valueType() == .String && b.valueType() == .String {
+				push(value::String(a) + value::String(b))
+			} else if a.valueType() == .Number && b.valueType() == .Number {
+				push(value::Number(a) + value::Number(b))
+			} else {
+				return runtimeError("Operands must be two numbers or two strings.")
+			}
+
+		case .Subtract: if binaryOp(0) != .Ok { return .RuntimeError }
+		case .Multiply: if binaryOp(1) != .Ok { return .RuntimeError }
+		case .Divide: if binaryOp(2) != .Ok { return .RuntimeError }
+
 		case .Negate:
 			if peek(0).valueType() != .Number {
 				return runtimeError("Operand must be a number.")
 			}
-			
+
 			peek(0)^ = -value::Number(peek(0)^)
 
 		case .Not: push(value::Bool(pop().isFalsey()))
 
-		case .Return:
-			v := pop()
-			v.print()
+		case .Print:
+			pop().print()
 			printf("\n")
+
+		case .Return:
 			vm.chunk = null
 			return .Ok
+
+		default: std::assert(false, "Unreachable")
 		}
 	}
 

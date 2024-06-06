@@ -23,13 +23,17 @@ fn disassembleInstruction*(c: ^chunk::Chunk, offset: uint): uint {
 	} else {
 		printf("%4d ", c.lines[offset])
 	}
-	
+
 	instruction := c.code[offset]
 	switch chunk::OpCode(instruction) {
 	case .Constant: return constantInstruction("OP_CONSTANT", c, offset)
 	case .Nil: return simpleInstruction("OP_NIL", offset)
 	case .True: return simpleInstruction("OP_TRUE", offset)
 	case .False: return simpleInstruction("OP_FALSE", offset)
+	case .Pop: return simpleInstruction("OP_POP", offset)
+	case .GetGlobal: return constantInstruction("OP_GET_GLOBAL", c, offset)
+	case .DefineGlobal: return constantInstruction("OP_DEFINE_GLOBAL", c, offset)
+	case .SetGlobal: return constantInstruction("OP_SET_GLOBAL", c, offset)
 	case .Equal: return simpleInstruction("OP_EQUAL", offset)
 	case .Greater: return simpleInstruction("OP_GREATER", offset)
 	case .Less: return simpleInstruction("OP_LESS", offset)
@@ -39,6 +43,7 @@ fn disassembleInstruction*(c: ^chunk::Chunk, offset: uint): uint {
 	case .Divide: return simpleInstruction("OP_DIVIDE", offset)
 	case .Negate: return simpleInstruction("OP_NEGATE", offset)
 	case .Not: return simpleInstruction("OP_NOT", offset)
+	case .Print: return simpleInstruction("OP_PRINT", offset)
 	case .Return: return simpleInstruction("OP_RETURN", offset)
 	}
 
@@ -48,7 +53,7 @@ fn disassembleInstruction*(c: ^chunk::Chunk, offset: uint): uint {
 
 fn disassembleChunk*(c: ^chunk::Chunk,  name: str) {
 	printf("== %s ==\n", name)
-	
+
 	offset := 0
 	for offset < c.length() {
 		offset = disassembleInstruction(c, offset)

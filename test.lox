@@ -1,1 +1,4 @@
-fun while var for
+var breakfast = "beignets";
+var beverage = "café au lait";
+breakfast = breakfast + " with " + beverage;
+print breakfast;

@@ -7,6 +7,10 @@ type OpCode* = enum {
 	Nil
 	True
 	False
+	Pop
+	GetGlobal
+	DefineGlobal
+	SetGlobal
 	Equal
 	Greater
 	Less
@@ -16,6 +20,7 @@ type OpCode* = enum {
 	Divide
 	Negate
 	Not
+	Print
 	Return
 }
 
