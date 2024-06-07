@@ -30,7 +30,7 @@ fn constantInstruction(name: str, c: ^chunk::Chunk, offset: uint): uint {
 }
 
 fn immediateInstruction(name: str, c: ^chunk::Chunk, offset: uint): uint {
-	printf("%-16s %d\n", name, c.code[offset+1])
+	printf("%-16s %4d\n", name, c.code[offset+1])
 	return offset + 2
 }
 

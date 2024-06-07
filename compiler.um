@@ -194,7 +194,11 @@ fn (c: ^Compiler) endScope() {
 		c.localCount--
 	}
 
-	emitOpAndByte(.PopN, n)
+	if n == 1 {
+		emitOpCode(.Pop)
+	} else if n > 0 {
+		emitOpAndByte(.PopN, n)
+	}
 }
 
 fn expression(); fn statement(); fn declaration()
