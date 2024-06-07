@@ -187,12 +187,14 @@ fn (c: ^Compiler) beginScope() { c.scopeDepth++ }
 fn (c: ^Compiler) endScope() {
 	c.scopeDepth--
 
-	// TODO: maybe optimize later
+	n := 0
 	for c.localCount > 0 &&
 	    c.locals[c.localCount - 1].depth > c.scopeDepth {
-		emitOpCode(.Pop)
+		n++
 		c.localCount--
 	}
+
+	emitOpAndByte(.PopN, n)
 }
 
 fn expression(); fn statement(); fn declaration()

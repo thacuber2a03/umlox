@@ -1,7 +1,11 @@
 {
-	if (true and false) print "no";
-	if (true and true) print "yes";
-	if (false or true) print "or";
+	var alwaysTrue = true and true;
+	var alwaysTrue2 = false or true;
+	var alwaysFalse = false and true;
+
+	if (alwaysFalse) print "no";
+	if (alwaysTrue) print "yes";
+	if (alwaysTrue2) print "or";
 	// testing for true or true is unnecessary
 
 	var i = 0;

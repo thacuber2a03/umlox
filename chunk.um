@@ -8,6 +8,7 @@ type OpCode* = enum {
 	True
 	False
 	Pop
+	PopN
 	GetLocal
 	GetGlobal
 	DefineGlobal

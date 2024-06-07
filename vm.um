@@ -138,6 +138,9 @@ fn run(): InterpretResult {
 		case .True: push(value::Bool(true))
 		case .False: push(value::Bool(false))
 		case .Pop: pop()
+		case .PopN:
+			amt := readByte()
+			for i := 0; i < amt; i++ { pop() }
 
 		case .GetGlobal:
 			name := value::String(readConstant())
