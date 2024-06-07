@@ -19,7 +19,7 @@ fn (b: ^Bool) valueType*(): ValueType { return .Bool }
 fn (b: ^Bool) print*() { printf("%v", b^) }
 fn (b: ^Bool) isFalsey*(): bool { return !b^ }
 
-type Nil* = struct {}
+type Nil* = struct {} // is this a good idea?
 
 fn (n: ^Nil) valueType*(): ValueType { return .Nil }
 fn (n: ^Nil) print*() { printf("nil") }

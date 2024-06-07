@@ -23,6 +23,9 @@ type OpCode* = enum {
 	Negate
 	Not
 	Print
+	Jump
+	JumpIfFalse
+	Loop
 	Return
 }
 

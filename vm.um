@@ -57,7 +57,7 @@ fn peek(distance: int): ^value::Value {
 
 fn init*() {
 	resetStack()
-	vm.globals = make(map[str]value::Value)
+	vm.globals = {}
 }
 
 fn free*() {
@@ -70,12 +70,17 @@ fn readByte(): uint8 {
 	return b
 }
 
+fn readOpCode(): chunk::OpCode {
+	return chunk::OpCode(readByte())
+}
+
 fn readConstant(): value::Value {
 	return vm.chunk.constants[readByte()]
 }
 
-fn readOpCode(): chunk::OpCode {
-	return chunk::OpCode(readByte())
+fn readShort(): uint16 {
+	vm.ip += 2
+	return (vm.chunk.code[vm.ip-2] << 8) | vm.chunk.code[vm.ip-1]
 }
 
 fn binaryOp(op: uint): InterpretResult {
@@ -123,12 +128,13 @@ fn run(): InterpretResult {
 				printf(" ]")
 			}
 			printf("\n")
+
 			debug::disassembleInstruction(vm.chunk, vm.ip)
 		}
 
 		switch ins := readOpCode(); ins {
 		case .Constant: push(readConstant())
-		case .Nil: push(value::Nil{})
+		case .Nil: push(value::Nil {})
 		case .True: push(value::Bool(true))
 		case .False: push(value::Bool(false))
 		case .Pop: pop()
@@ -190,6 +196,18 @@ fn run(): InterpretResult {
 		case .Print:
 			pop().print()
 			printf("\n")
+
+		case .Jump:
+			offset := readShort()
+			vm.ip += offset
+
+		case .JumpIfFalse:
+			offset := readShort()
+			if peek(0).isFalsey() { vm.ip += offset }
+
+		case .Loop:
+			offset := readShort()
+			vm.ip -= offset
 
 		case .Return:
 			vm.chunk = null

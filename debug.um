@@ -13,6 +13,14 @@ fn byteInstruction(name: str, c: ^chunk::Chunk, offset: uint): uint {
 	return offset + 2
 }
 
+fn jumpInstruction(name: str, sign: int, c: ^chunk::Chunk, offset: uint): uint {
+	jump := uint16(c.code[offset + 1] << 8)
+	jump |= c.code[offset+2]
+	printf("%-16s %4d -> %d\n", name, offset,
+		offset + 3 + sign * jump)
+	return offset + 3
+}
+
 fn constantInstruction(name: str, c: ^chunk::Chunk, offset: uint): uint {
 	constant := c.code[offset + 1]
 	printf("%-16s %4d '", name, constant)
@@ -41,6 +49,7 @@ fn disassembleInstruction*(c: ^chunk::Chunk, offset: uint): uint {
 	case .GetLocal: return byteInstruction("OP_GET_LOCAL", c, offset)
 	case .DefineGlobal: return constantInstruction("OP_DEFINE_GLOBAL", c, offset)
 	case .SetGlobal: return constantInstruction("OP_SET_GLOBAL", c, offset)
+	case .SetLocal: return byteInstruction("OP_SET_LOCAL", c, offset)
 	case .Equal: return simpleInstruction("OP_EQUAL", offset)
 	case .Greater: return simpleInstruction("OP_GREATER", offset)
 	case .Less: return simpleInstruction("OP_LESS", offset)
@@ -51,6 +60,9 @@ fn disassembleInstruction*(c: ^chunk::Chunk, offset: uint): uint {
 	case .Negate: return simpleInstruction("OP_NEGATE", offset)
 	case .Not: return simpleInstruction("OP_NOT", offset)
 	case .Print: return simpleInstruction("OP_PRINT", offset)
+	case .Jump: return jumpInstruction("OP_JUMP", 1, c, offset)
+	case .JumpIfFalse: return jumpInstruction("OP_JUMP_IF_FALSE", 1, c, offset)
+	case .Loop: return jumpInstruction("OP_LOOP", -1, c, offset)
 	case .Return: return simpleInstruction("OP_RETURN", offset)
 	}
 
@@ -65,4 +77,5 @@ fn disassembleChunk*(c: ^chunk::Chunk,  name: str) {
 	for offset < c.length() {
 		offset = disassembleInstruction(c, offset)
 	}
+	printf("\n")
 }

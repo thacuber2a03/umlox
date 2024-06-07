@@ -122,6 +122,23 @@ fn emitOpCodes(op1: chunk::OpCode, op2: chunk::OpCode) {
 	emitOpCode(op2)
 }
 
+fn emitLoop(start: uint) {
+	emitOpCode(.Loop)
+
+	offset := currentChunk().length() - start + 2
+	if offset > common::UINT16_MAX { error("Loop body too large.") }
+
+	emitByte((offset >> 8) & 0xff)
+	emitByte(offset & 0xff)
+}
+
+fn emitJump(instruction: chunk::OpCode): uint {
+	emitOpCode(instruction)
+	emitByte(0xff)
+	emitByte(0xff)
+	return currentChunk().length() - 2
+}
+
 fn emitReturn() {
 	emitOpCode(.Return)
 }
@@ -141,6 +158,17 @@ fn emitConstant(v: value::Value) {
 	emitOpAndByte(.Constant, makeConstant(v))
 }
 
+fn patchJump(offset: uint) {
+	jump := currentChunk().length() - offset - 2
+
+	if jump > common::UINT16_MAX {
+		error("Too much code to jump over.")
+	}
+
+	currentChunk().code[offset] = (jump >> 8) & 0xff
+	currentChunk().code[offset + 1] = jump & 0xff
+}
+
 fn (compiler: ^Compiler) init() {
 	compiler.localCount = 0
 	compiler.scopeDepth = 0
@@ -154,17 +182,16 @@ fn endCompiler() {
 	}
 }
 
-fn beginScope() { current.scopeDepth++ }
+fn (c: ^Compiler) beginScope() { c.scopeDepth++ }
 
-fn endScope() {
-	current.scopeDepth--
+fn (c: ^Compiler) endScope() {
+	c.scopeDepth--
 
 	// TODO: maybe optimize later
-	for current.localCount > 0 &&
-	    current.locals[current.localCount - 1].depth >
-	      current.scopeDepth {
+	for c.localCount > 0 &&
+	    c.locals[c.localCount - 1].depth > c.scopeDepth {
 		emitOpCode(.Pop)
-		current.localCount--
+		c.localCount--
 	}
 }
 
@@ -188,21 +215,20 @@ fn (c: ^Compiler) resolveLocal(name: ^scanner::Token): int {
 			if local.depth == -1 {
 				error("Can't read local variable in its own initializer.")
 			}
-
 			return i
 		}
 	}
 	return -1
 }
 
-fn addLocal(name: scanner::Token) {
-	if current.localCount == common::UINT8_COUNT {
+fn (c: ^Compiler) addLocal(name: scanner::Token) {
+	if c.localCount == common::UINT8_COUNT {
 		error("Too many local variables in one function.")
 		return
 	}
 
-	local := &current.locals[current.localCount]
-	current.localCount++
+	local := &c.locals[c.localCount]
+	c.localCount++
 	local.name = name
 	local.depth = -1
 }
@@ -222,7 +248,7 @@ fn declareVariable() {
 		}
 	}
 
-	addLocal(name^)
+	current.addLocal(name^)
 }
 
 fn parseVariable(errorMessage: str): uint8 {
@@ -234,6 +260,7 @@ fn parseVariable(errorMessage: str): uint8 {
 	return identifierConstant(&parser.previous)
 }
 
+// mark latest declared local as defined (initialized)
 fn markInitialized() {
 	current.locals[current.localCount-1].depth =
 		current.scopeDepth
@@ -244,7 +271,15 @@ fn defineVariable(global: uint8) {
 		markInitialized()
 		return
 	}
+
 	emitOpAndByte(.DefineGlobal, global)
+}
+
+fn and(_: bool) {
+	endJump := emitJump(.JumpIfFalse)
+	emitOpCode(.Pop)
+	parsePrecedence(.And)
+	patchJump(endJump)
 }
 
 fn binary(_: bool) {
@@ -283,6 +318,17 @@ fn grouping(_: bool) {
 fn number(_: bool) {
 	v := std::atof(parser.previous.lexeme)
 	emitConstant(value::Number(v))
+}
+
+fn or(_: bool) {
+	elseJump := emitJump(.JumpIfFalse)
+	endJump := emitJump(.Jump)
+
+	patchJump(elseJump)
+	emitOpCode(.Pop)
+
+	parsePrecedence(.Or)
+	patchJump(endJump)
 }
 
 fn string(_: bool) {
@@ -380,10 +426,89 @@ fn expressionStatement() {
 	emitOpCode(.Pop)
 }
 
+fn forStatement() {
+	current.beginScope()
+	consume(.LeftParen, "Expect '(' after 'for'.")
+
+	if match(.Semicolon) {
+		// No initializer.
+	} else if match(.Var) {
+		varDeclaration();
+	} else {
+		expressionStatement();
+	}
+
+	loopStart := currentChunk().length()
+	exitJump := -1
+
+	if !match(.Semicolon) {
+		expression()
+		consume(.Semicolon, "Expect ';' after loop condition.")
+
+		exitJump = emitJump(.JumpIfFalse)
+		emitOpCode(.Pop)
+	}
+
+	if !match(.RightParen) {
+		bodyJump := emitJump(.Jump)
+		incrementStart := currentChunk().length()
+		expression()
+		emitOpCode(.Pop)
+		consume(.RightParen, "Expect ')' after for clauses.")
+
+		emitLoop(loopStart)
+		loopStart = incrementStart
+		patchJump(bodyJump)
+	}
+
+	statement()
+	emitLoop(loopStart)
+
+	if exitJump != -1 {
+		patchJump(exitJump)
+		emitOpCode(.Pop)
+	}
+
+	current.endScope()
+}
+
+fn ifStatement() {
+	consume(.LeftParen, "Expect '(' after 'if'.")
+	expression()
+	consume(.RightParen, "Expect ')' after condition.")
+
+	thenJump := emitJump(.JumpIfFalse)
+	emitOpCode(.Pop)
+	statement()
+
+	elseJump := emitJump(.Jump)
+
+	patchJump(thenJump)
+	emitOpCode(.Pop)
+
+	if match(.Else) { statement() }
+	patchJump(elseJump)
+}
+
 fn printStatement() {
 	expression()
 	consume(.Semicolon, "Expect ';' after value.")
 	emitOpCode(.Print)
+}
+
+fn whileStatement() {
+	loopStart := currentChunk().length()
+	consume(.LeftParen, "Expect '(' after 'while'.")
+	expression()
+	consume(.RightParen, "Expect ')' after condition.")
+
+	exitJump := emitJump(.JumpIfFalse)
+	emitOpCode(.Pop)
+	statement()
+	emitLoop(loopStart)
+
+	patchJump(exitJump)
+	emitOpCode(.Pop)
 }
 
 fn synchronize() {
@@ -403,10 +528,16 @@ fn synchronize() {
 fn statement() {
 	if match(.Print) {
 		printStatement()
+	} else if match(.For) {
+		forStatement()
+	} else if match(.If) {
+		ifStatement()
+	} else if match(.While) {
+		whileStatement()
 	} else if match(.LeftBrace) {
-		beginScope()
+		current.beginScope()
 		block()
-		endScope()
+		current.endScope()
 	} else {
 		expressionStatement()
 	}
@@ -447,6 +578,8 @@ fn initRules() {
 	rules[uint(scanner::TokenType.LessEqual)] = {undef, binary, .Comparison}
 	rules[uint(scanner::TokenType.String)] = {string, undef, .None}
 	rules[uint(scanner::TokenType.Identifier)].prefix = variable
+	rules[uint(scanner::TokenType.And)] = {undef, and, .And}
+	rules[uint(scanner::TokenType.Or)] = {undef, or, .Or}
 
 	initedRules = true
 }
