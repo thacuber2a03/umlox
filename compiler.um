@@ -4,6 +4,7 @@ import (
 	"common.um"
 	"chunk.um"
 	"debug.um"
+	"object.um"
 	"scanner.um"
 	"value.um"
 )
@@ -39,16 +40,23 @@ type Local = struct {
 	depth: uint
 }
 
+type FunctionType = enum { Function; Script }
+
 type Compiler = struct {
+	enclosing: ^Compiler
+	function: ^object::Function
+	ftype: FunctionType
+
 	locals: [common::UINT8_COUNT]Local
 	localCount, scopeDepth: int
 }
 
 var parser: Parser
 var current: ^Compiler = null
-var compilingChunk: ^chunk::Chunk
 
-fn currentChunk(): ^chunk::Chunk { return compilingChunk }
+fn currentChunk(): ^chunk::Chunk {
+	return &current.function.chunk
+}
 
 fn errorAt(token: ^scanner::Token, message: str) {
 	if parser.panicMode { return }
@@ -140,6 +148,7 @@ fn emitJump(instruction: chunk::OpCode): uint {
 }
 
 fn emitReturn() {
+	emitOpCode(.Nil)
 	emitOpCode(.Return)
 }
 
@@ -169,17 +178,37 @@ fn patchJump(offset: uint) {
 	currentChunk().code[offset + 1] = jump & 0xff
 }
 
-fn (compiler: ^Compiler) init() {
-	compiler.localCount = 0
-	compiler.scopeDepth = 0
-	current = compiler
+fn (c: ^Compiler) init(ftype: FunctionType) {
+	c.enclosing = current
+	c.function = null
+	c.ftype = ftype
+	c.localCount = 0
+	c.scopeDepth = 0
+	c.function = object::newFunction()
+	current = c
+	if ftype != .Script {
+		current.function.name = parser.previous.lexeme
+	}
+
+	local := &c.locals[c.localCount]
+	c.localCount++
+	local.depth = 0
+	local.name.lexeme = ""
 }
 
-fn endCompiler() {
+fn endCompiler(): ^object::Function {
 	emitReturn()
+	function := current.function
+
 	if common::DEBUG_PRINT_CODE && !parser.hadError {
-		debug::disassembleChunk(currentChunk(), "code")
+		debug::disassembleChunk(
+			currentChunk(),
+			function.name != "" ? function.name : "<script>"
+		)
 	}
+
+	current = current.enclosing
+	return function
 }
 
 fn (c: ^Compiler) beginScope() { c.scopeDepth++ }
@@ -267,18 +296,34 @@ fn parseVariable(errorMessage: str): uint8 {
 }
 
 // mark latest declared local as defined (initialized)
-fn markInitialized() {
-	current.locals[current.localCount-1].depth =
-		current.scopeDepth
+fn (c: ^Compiler) markInitialized() {
+	if c.scopeDepth == 0 { return }
+	c.locals[c.localCount-1].depth = c.scopeDepth
 }
 
 fn defineVariable(global: uint8) {
 	if current.scopeDepth > 0 {
-		markInitialized()
+		current.markInitialized()
 		return
 	}
 
 	emitOpAndByte(.DefineGlobal, global)
+}
+
+fn argumentList(): uint8 {
+	argCount := 0
+	if !check(.RightParen) {
+		for true {
+			expression()
+			if argCount == 255 {
+				error("Can't have more than 255 arguments.")
+			}
+			argCount++
+			if !match(.Comma) { break }
+		}
+	}
+	consume(.RightParen, "Expect ')' after arguments.")
+	return argCount
 }
 
 fn and(_: bool) {
@@ -306,6 +351,11 @@ fn binary(_: bool) {
 	case .Star:  emitOpCode(.Multiply)
 	case .Slash: emitOpCode(.Divide)
 	}
+}
+
+fn call(_: bool) {
+	argCount := argumentList()
+	emitOpAndByte(.Call, argCount)
 }
 
 fn literal(_: bool) {
@@ -413,6 +463,39 @@ fn block() {
 	consume(.RightBrace, "Expect '}' after block.")
 }
 
+fn function(ftype: FunctionType) {
+	var compiler: Compiler
+	compiler.init(ftype)
+	compiler.beginScope()
+
+	consume(.LeftParen, "Expect '(' after function name.")
+	if !check(.RightParen) {
+		for true {
+			current.function.arity++
+			if current.function.arity > 255 {
+				errorAtCurrent("Can't have more than 255 parameters.")
+			}
+
+			constant := parseVariable("Expect parameter name.");
+			defineVariable(constant)
+			if !match(.Comma) { break }
+		}
+	}
+	consume(.RightParen, "Expect ')' after parameters.")
+	consume(.LeftBrace, "Expect '{' before function body.")
+	block()
+
+	function := endCompiler()
+	emitOpAndByte(.Constant, makeConstant(function))
+}
+
+fn funDeclaration() {
+	global := parseVariable("Expect function name.")
+	current.markInitialized()
+	function(.Function)
+	defineVariable(global)
+}
+
 fn varDeclaration() {
 	global := parseVariable("Expect variable name.")
 
@@ -502,6 +585,20 @@ fn printStatement() {
 	emitOpCode(.Print)
 }
 
+fn returnStatement() {
+	if current.ftype == .Script {
+		error("Can't return from top-level code.")
+	}
+
+	if match(.Semicolon) {
+		emitReturn()
+	} else {
+		expression()
+		consume(.Semicolon, "Expect ';' after return value.")
+		emitOpCode(.Return)
+	}
+}
+
 fn whileStatement() {
 	loopStart := currentChunk().length()
 	consume(.LeftParen, "Expect '(' after 'while'.")
@@ -538,6 +635,8 @@ fn statement() {
 		forStatement()
 	} else if match(.If) {
 		ifStatement()
+	} else if match(.Return) {
+		returnStatement()
 	} else if match(.While) {
 		whileStatement()
 	} else if match(.LeftBrace) {
@@ -550,7 +649,9 @@ fn statement() {
 }
 
 fn declaration() {
-	if match(.Var) {
+	if match(.Fun) {
+		funDeclaration()
+	} else if match(.Var) {
 		varDeclaration()
 	} else {
 		statement()
@@ -566,7 +667,7 @@ fn initRules() {
 		r.precedence = .None
 	}
 
-	rules[uint(scanner::TokenType.LeftParen)].prefix = grouping
+	rules[uint(scanner::TokenType.LeftParen)] = {grouping, call, .Call}
 	rules[uint(scanner::TokenType.Minus)] = {unary, binary, .Term}
 	rules[uint(scanner::TokenType.Plus)] = {undef, binary, .Term}
 	rules[uint(scanner::TokenType.Slash)] = {undef, binary, .Factor}
@@ -590,7 +691,7 @@ fn initRules() {
 	initedRules = true
 }
 
-fn compile*(source: str, c: ^chunk::Chunk): bool {
+fn compile*(source: str): ^object::Function {
 	if !initedRules {
 		initRules()
 		initedRules = true
@@ -598,8 +699,7 @@ fn compile*(source: str, c: ^chunk::Chunk): bool {
 
 	scanner::init(source)
 	var compiler: Compiler
-	compiler.init()
-	compilingChunk = c
+	compiler.init(.Script)
 
 	parser.hadError = false
 	parser.panicMode = false
@@ -608,9 +708,9 @@ fn compile*(source: str, c: ^chunk::Chunk): bool {
 
 	for !match(.Eof) { declaration() }
 
-	endCompiler()
-
-	compilingChunk = null
+	function := endCompiler()
 	current = null
-	return !parser.hadError
+	return parser.hadError ?
+		^object::Function(null) : // why the cast
+		function
 }

@@ -3,6 +3,7 @@ import (
 
 	"chunk.um"
 	"value.um"
+	"object.um"
 	"common.um"
 	"debug.um"
 	"compiler.um"
@@ -14,10 +15,20 @@ type InterpretResult* = enum {
 	RuntimeError
 }
 
-const STACK_MAX = 256
+const FRAMES_MAX* = 64
+const STACK_MAX* = FRAMES_MAX * common::UINT8_COUNT
+
+// TODO: encode some other way
+type CallFrame = struct {
+	function: ^object::Function
+	ip: uint
+	slots: uint
+}
 
 type VM = struct {
-	chunk: ^chunk::Chunk
+	frames: [FRAMES_MAX]CallFrame
+	frameCount: uint
+	
 	ip: uint
 	stack: [STACK_MAX]value::Value
 	stackTop: uint
@@ -26,18 +37,32 @@ type VM = struct {
 
 var vm: VM
 
+fn clock(args: uint, stack: []value::Value, base: uint): value::Value {
+	return value::Number(std::clock())
+}
+
 fn resetStack() {
 	vm.stackTop = 0
+	vm.frameCount = 0
 }
 
 fn runtimeError(msg: str): InterpretResult {
 	fprintf(std::stderr(), "%s\n", msg)
 
-	instruction := vm.ip - 1
-	line := vm.chunk.lines[instruction]
-	fprintf(std::stderr(), "[line %d] in script\n", line)
-	resetStack()
+	for i := int(vm.frameCount - 1); i >= 0; i-- {
+		frame := &vm.frames[i]
+		function := frame.function
+		instruction := frame.ip - 1
+		fprintf(std::stderr(), "[line %d] in ",
+			function.chunk.lines[instruction])
+		if function.name == "" {
+			fprintf(std::stderr(), "script\n")
+		} else {
+			fprintf(std::stderr(), "%s()\n", function.name)
+		}
+	}
 
+	resetStack()
 	return .RuntimeError
 }
 
@@ -55,37 +80,74 @@ fn peek(distance: int): ^value::Value {
 	return &vm.stack[vm.stackTop-1 - distance]
 }
 
+fn call(function: ^object::Function, argCount: uint): bool {
+	if argCount != function.arity {
+		runtimeError(sprintf("Expected %d arguments but got %d.", function.arity, argCount))
+		return false
+	}
+	
+	if vm.frameCount == FRAMES_MAX {
+		runtimeError("Stack overflow.")
+		return false
+	}
+
+	frame := &vm.frames[vm.frameCount]
+	vm.frameCount++
+	frame.function = function
+	frame.ip = 0
+	frame.slots = vm.stackTop - argCount - 1
+	return true
+}
+
+fn callValue(callee: value::Value, argCount: uint): bool {
+	if f := ^object::Function(callee); f != null {
+		return call(f, argCount)
+	}
+
+	if f := ^object::NativeFunction(callee); f != null {
+		result := f(argCount, vm.stack, vm.stackTop-argCount)
+		vm.stackTop -= argCount + 1
+		push(result)
+		return true
+	}
+
+	runtimeError("Can only call functions and classes.")
+	return false
+}
+
 fn init*() {
 	resetStack()
 	vm.globals = {}
+	vm.globals["clock"] = object::NativeFunction(clock)
 }
 
 fn free*() {
 
 }
 
-fn readByte(): uint8 {
-	b := vm.chunk.code[vm.ip]
-	vm.ip++
+fn readByte(frame: ^CallFrame): uint8 {
+	b := frame.function.chunk.code[frame.ip]
+	frame.ip++
 	return b
 }
 
-fn readOpCode(): chunk::OpCode {
-	return chunk::OpCode(readByte())
+fn readOpCode(frame: ^CallFrame): chunk::OpCode {
+	return chunk::OpCode(readByte(frame))
 }
 
-fn readConstant(): value::Value {
-	return vm.chunk.constants[readByte()]
+fn readConstant(frame: ^CallFrame): value::Value {
+	return frame.function.chunk.constants[readByte(frame)]
 }
 
-fn readShort(): uint16 {
-	vm.ip += 2
-	return (vm.chunk.code[vm.ip-2] << 8) | vm.chunk.code[vm.ip-1]
+fn readShort(frame: ^CallFrame): uint16 {
+	frame.ip += 2
+	return (frame.function.chunk.code[frame.ip-2] << 8) |
+	        frame.function.chunk.code[frame.ip-1]
 }
 
 fn binaryOp(op: uint): InterpretResult {
-	if peek(0).valueType() != .Number ||
-	   peek(1).valueType() != .Number {
+	if lhs, rhs := ^value::Number(peek(0)^), ^value::Number(peek(1)^)
+	lhs == null && rhs == null {
 		return runtimeError("Operands must be numbers.")
 	}
 
@@ -103,8 +165,8 @@ fn binaryOp(op: uint): InterpretResult {
 }
 
 fn comparisonOp(op: uint): InterpretResult {
-	if peek(0).valueType() != .Number ||
-	   peek(1).valueType() != .Number {
+	if lhs, rhs := ^value::Number(peek(0)^), ^value::Number(peek(1)^)
+	lhs == null || rhs == null {
 		return runtimeError("Operands must be numbers.")
 	}
 
@@ -119,6 +181,8 @@ fn comparisonOp(op: uint): InterpretResult {
 }
 
 fn run(): InterpretResult {
+	frame := &vm.frames[vm.frameCount - 1]
+
 	for true {
 		if common::DEBUG_TRACE_EXECUTION {
 			printf(" ")
@@ -129,56 +193,60 @@ fn run(): InterpretResult {
 			}
 			printf("\n")
 
-			debug::disassembleInstruction(vm.chunk, vm.ip)
+			debug::disassembleInstruction(&frame.function.chunk, frame.ip)
 		}
 
-		switch ins := readOpCode(); ins {
-		case .Constant: push(readConstant())
+		switch ins := readOpCode(frame); ins {
+		case .Constant: push(readConstant(frame))
 		case .Nil: push(value::Nil {})
 		case .True: push(value::Bool(true))
 		case .False: push(value::Bool(false))
 		case .Pop: pop()
 		case .PopN:
-			amt := readByte()
+			amt := readByte(frame)
 			for i := 0; i < amt; i++ { pop() }
 
 		case .GetGlobal:
-			name := value::String(readConstant())
+			name := value::String(readConstant(frame))
 			if !validkey(vm.globals, name) {
 				return runtimeError(sprintf("Undefined variable '%s'.", name))
 			}
 			push(vm.globals[name])
 
-		case .GetLocal: push(vm.stack[readByte()])
+		case .GetLocal:
+			offset := readByte(frame)
+			push(vm.stack[frame.slots+offset])
 
 		case .DefineGlobal:
-			name := value::String(readConstant())
+			name := value::String(readConstant(frame))
 			vm.globals[name] = peek(0)^
 			pop()
 
 		case .SetGlobal:
-			name := value::String(readConstant())
+			name := value::String(readConstant(frame))
 			if !validkey(vm.globals, name) {
 				return runtimeError(sprintf("Undefined variable '%s'.", name))
 			}
 			vm.globals[name] = peek(0)^
 
-		case .SetLocal: vm.stack[readByte()] = peek(0)^
+		case .SetLocal:
+			offset := readByte(frame)
+			vm.stack[frame.slots+offset] = peek(0)^
 
 		case .Less: comparisonOp(0)
 		case .Greater: comparisonOp(1)
 
 		case .Equal:
 			b, a := pop(), pop()
-			push(value::Bool(value::equals(a, b)))
+			push(value::Bool(a.equals(&b)))
 
 		case .Add:
 			b, a := pop(), pop()
 
-			if a.valueType() == .String && b.valueType() == .String {
-				push(value::String(a) + value::String(b))
-			} else if a.valueType() == .Number && b.valueType() == .Number {
-				push(value::Number(a) + value::Number(b))
+			if lhs, rhs := ^value::String(b), ^value::String(a); lhs != null && rhs != null {
+				push(lhs^ + rhs^)
+			} else if lhs, rhs := ^value::Number(b), ^value::Number(a); lhs != null && rhs != null {
+				push(lhs^ + rhs^)
 			} else {
 				return runtimeError("Operands must be two numbers or two strings.")
 			}
@@ -188,7 +256,7 @@ fn run(): InterpretResult {
 		case .Divide: if binaryOp(2) != .Ok { return .RuntimeError }
 
 		case .Negate:
-			if peek(0).valueType() != .Number {
+			if n := ^value::Number(peek(0)^); n != null {
 				return runtimeError("Operand must be a number.")
 			}
 
@@ -201,20 +269,35 @@ fn run(): InterpretResult {
 			printf("\n")
 
 		case .Jump:
-			offset := readShort()
-			vm.ip += offset
+			offset := readShort(frame)
+			frame.ip += offset
 
 		case .JumpIfFalse:
-			offset := readShort()
-			if peek(0).isFalsey() { vm.ip += offset }
+			offset := readShort(frame)
+			if peek(0).isFalsey() { frame.ip += offset }
 
 		case .Loop:
-			offset := readShort()
-			vm.ip -= offset
+			offset := readShort(frame)
+			frame.ip -= offset
+
+		case .Call:
+			argCount := readByte(frame)
+			if !callValue(peek(argCount)^, argCount) {
+				return .RuntimeError
+			}
+			frame = &vm.frames[vm.frameCount - 1]
 
 		case .Return:
-			vm.chunk = null
-			return .Ok
+			result := pop()
+			vm.frameCount--
+			if vm.frameCount == 0 {
+				pop()
+				return .Ok
+			}
+
+			vm.stackTop = frame.slots
+			push(result)
+			frame = &vm.frames[vm.frameCount - 1]
 
 		default: std::assert(false, "Unreachable")
 		}
@@ -224,17 +307,11 @@ fn run(): InterpretResult {
 }
 
 fn interpret*(source: str): InterpretResult {
-	var c: chunk::Chunk
-	c.init()
+	function := compiler::compile(source)
+	if function == null { return .CompileError }
+	
+	push(function)
+	call(function, 0)
 
-	if (!compiler::compile(source, &c)) {
-		return .CompileError
-	}
-
-	vm.chunk = &c
-	vm.ip = 0
-
-	res := run()
-	vm.chunk = null
-	return res
+	return run()
 }

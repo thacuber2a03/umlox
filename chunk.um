@@ -27,6 +27,7 @@ type OpCode* = enum {
 	Jump
 	JumpIfFalse
 	Loop
+	Call
 	Return
 }
 

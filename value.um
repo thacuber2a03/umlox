@@ -1,51 +1,42 @@
-type ValueType* = enum {
-	Bool
-	Nil
-	Number
-	String
-}
-
 type Value* = interface {
-	valueType(): ValueType
 	print()
 	isFalsey(): bool
-	// sadly this isn't possible
-	// equals(v: Value): bool
+	equals(v: ^Value): bool
 }
 
 type Bool* = bool
 
-fn (b: ^Bool) valueType*(): ValueType { return .Bool }
 fn (b: ^Bool) print*() { printf("%v", b^) }
 fn (b: ^Bool) isFalsey*(): bool { return !b^ }
 
-type Nil* = struct {} // is this a good idea?
+fn (b: ^Bool) equals*(v: ^Value): bool {
+	o := ^Bool(v^); return b^ == o^
+}
 
-fn (n: ^Nil) valueType*(): ValueType { return .Nil }
+// TODO: unsure of this typedef
+type Nil* = struct {} 
+
 fn (n: ^Nil) print*() { printf("nil") }
 fn (n: ^Nil) isFalsey*(): bool { return true }
 
+fn (n: ^Nil) equals*(v: ^Value): bool {
+	o := ^Nil(v^); return o != null
+}
+
 type Number* = real
 
-fn (n: ^Number) valueType*(): ValueType { return .Number }
 fn (n: ^Number) print*() { printf("%g", n^) }
 fn (n: ^Number) isFalsey*(): bool { return false }
 
+fn (n: ^Number) equals*(v: ^Value): bool {
+	o := ^Number(v^); return n^ == o^
+}
+
 type String* = str
 
-fn (s: ^String) valueType*(): ValueType { return .String }
 fn (s: ^String) print*() { printf("%s", s^) }
 fn (s: ^String) isFalsey*(): bool { return false }
 
-fn equals*(a: Value, b: Value): bool {
-	if a.valueType() != b.valueType() { return false }
-
-	switch a.valueType() {
-	case .Bool: return Bool(a) == Bool(b)
-	case .Number: return Number(a) == Number(b)
-	case .String: return String(a) == String(b)
-	case .Nil: return true
-	}
-
-	return false // should be unreachable
+fn (s: ^String) equals*(v: ^Value): bool {
+	o := ^String(v^); return s^ == o^
 }

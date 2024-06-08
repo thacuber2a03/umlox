@@ -1,13 +1,41 @@
-// TODO: stub
-
 import (
 	"value.um"
+	"chunk.um"
 )
 
-type ObjectType = enum {
+type Function* = struct {
+	arity: uint
+	chunk: chunk::Chunk
+	name: value::String
 }
 
-type Object* = interface {
-	value::Value
-	objectType(): ObjectType
+fn (f: ^Function) print*() {
+	if f.name == "" {
+		printf("<script>")
+		return
+	}
+
+	printf("<fn %s>", f.name)
+}
+
+fn (f: ^Function) isFalsey*(): bool { return false }
+
+fn (f: ^Function) equals*(v: ^value::Value): bool {
+	o := ^Function(v^); return f == o
+}
+
+fn newFunction*(): ^Function {
+	f := new(Function)
+	f.chunk.init()
+	return f
+}
+
+// TODO: expose the stack in some other way but this
+type NativeFunction* = fn(argCount: uint, stack: []value::Value, base: uint): value::Value
+
+fn (f: ^NativeFunction) print*() { printf("<native fn>") }
+fn (f: ^NativeFunction) isFalsey*(): bool { return false }
+
+fn (f: ^NativeFunction) equals*(v: ^value::Value): bool {
+	o := ^NativeFunction(v^); return f == o
 }
