@@ -245,9 +245,9 @@ fn run(): InterpretResult {
 		case .Add:
 			b, a := pop(), pop()
 
-			if lhs, rhs := ^value::String(b), ^value::String(a); lhs != null && rhs != null {
+			if lhs, rhs := ^value::String(a), ^value::String(b); lhs != null && rhs != null {
 				push(lhs^ + rhs^)
-			} else if lhs, rhs := ^value::Number(b), ^value::Number(a); lhs != null && rhs != null {
+			} else if lhs, rhs := ^value::Number(a), ^value::Number(b); lhs != null && rhs != null {
 				push(lhs^ + rhs^)
 			} else {
 				return runtimeError("Operands must be two numbers or two strings.")
