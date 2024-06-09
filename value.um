@@ -2,12 +2,14 @@ type Value* = interface {
 	print()
 	isFalsey(): bool
 	equals(v: ^Value): bool
+	unlink() // for, uhh, "garbage collection"
 }
 
 type Bool* = bool
 
 fn (b: ^Bool) print*() { printf("%v", b^) }
 fn (b: ^Bool) isFalsey*(): bool { return !b^ }
+fn (b: ^Bool) unlink*() {}
 
 fn (b: ^Bool) equals*(v: ^Value): bool {
 	o := ^Bool(v^); return b^ == o^
@@ -18,6 +20,7 @@ type Nil* = struct {}
 
 fn (n: ^Nil) print*() { printf("nil") }
 fn (n: ^Nil) isFalsey*(): bool { return true }
+fn (n: ^Nil) unlink*() {}
 
 fn (n: ^Nil) equals*(v: ^Value): bool {
 	o := ^Nil(v^); return o != null
@@ -27,6 +30,7 @@ type Number* = real
 
 fn (n: ^Number) print*() { printf("%g", n^) }
 fn (n: ^Number) isFalsey*(): bool { return false }
+fn (n: ^Number) unlink*() {}
 
 fn (n: ^Number) equals*(v: ^Value): bool {
 	o := ^Number(v^); return n^ == o^
@@ -36,6 +40,7 @@ type String* = str
 
 fn (s: ^String) print*() { printf("%s", s^) }
 fn (s: ^String) isFalsey*(): bool { return false }
+fn (s: ^String) unlink*() {}
 
 fn (s: ^String) equals*(v: ^Value): bool {
 	o := ^String(v^); return s^ == o^

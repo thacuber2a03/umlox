@@ -35,11 +35,8 @@ type ParseRule = struct {
 	precedence: Precedence
 }
 
-type Local = struct {
-	name: scanner::Token
-	depth: uint
-}
-
+type Local = struct { name: scanner::Token; depth: uint; isCaptured: bool }
+type Upvalue = struct { index: uint8; isLocal: bool }
 type FunctionType = enum { Function; Script }
 
 type Compiler = struct {
@@ -49,6 +46,7 @@ type Compiler = struct {
 
 	locals: [common::UINT8_COUNT]Local
 	localCount, scopeDepth: int
+	upvalues: [common::UINT8_COUNT]Upvalue
 }
 
 var parser: Parser
@@ -194,6 +192,7 @@ fn (c: ^Compiler) init(ftype: FunctionType) {
 	c.localCount++
 	local.depth = 0
 	local.name.lexeme = ""
+	local.isCaptured = false
 }
 
 fn endCompiler(): ^object::Function {
@@ -213,21 +212,31 @@ fn endCompiler(): ^object::Function {
 
 fn (c: ^Compiler) beginScope() { c.scopeDepth++ }
 
+fn emitPop(n: uint) {
+	if n == 1 {
+		emitOpCode(.Pop)
+	} else if n > 0 {
+		emitOpAndByte(.PopN, n)
+	}
+}
+
 fn (c: ^Compiler) endScope() {
 	c.scopeDepth--
 
 	n := 0
 	for c.localCount > 0 &&
 	    c.locals[c.localCount - 1].depth > c.scopeDepth {
-		n++
+		if c.locals[c.localCount - 1].isCaptured {
+			emitPop(n)
+			n = 0
+			emitOpCode(.CloseUpvalue)
+		} else {
+			n++
+		}
 		c.localCount--
 	}
 
-	if n == 1 {
-		emitOpCode(.Pop)
-	} else if n > 0 {
-		emitOpAndByte(.PopN, n)
-	}
+	emitPop(n)
 }
 
 fn expression(); fn statement(); fn declaration()
@@ -256,6 +265,43 @@ fn (c: ^Compiler) resolveLocal(name: ^scanner::Token): int {
 	return -1
 }
 
+fn (c: ^Compiler) addUpvalue(index: uint8, isLocal: bool): int {
+	upvalueCount := c.function.upvalueCount
+
+	for i := 0; i < upvalueCount; i++ {
+		upvalue := &c.upvalues[i]
+		if upvalue.index == index &&
+		   upvalue.isLocal == isLocal {
+			return i
+		}
+	}
+
+	if upvalueCount == common::UINT8_COUNT {
+		error("Too many closure variables in function.")
+		return 0
+	}
+
+	c.upvalues[upvalueCount].isLocal = isLocal
+	c.upvalues[upvalueCount].index = index
+	c.function.upvalueCount++
+	return upvalueCount
+}
+
+fn (c: ^Compiler) resolveUpvalue(name: ^scanner::Token): int {
+	if c.enclosing == null { return -1 }
+
+	local := c.enclosing.resolveLocal(name)
+	if local != -1 {
+		c.enclosing.locals[local].isCaptured = true
+		return c.addUpvalue(local, true)
+	}
+
+	upvalue := c.enclosing.resolveUpvalue(name)
+	if upvalue != -1 { return c.addUpvalue(upvalue, false) }
+
+	return -1
+}
+
 fn (c: ^Compiler) addLocal(name: scanner::Token) {
 	if c.localCount == common::UINT8_COUNT {
 		error("Too many local variables in one function.")
@@ -266,6 +312,7 @@ fn (c: ^Compiler) addLocal(name: scanner::Token) {
 	c.localCount++
 	local.name = name
 	local.depth = -1
+	local.isCaptured = false
 }
 
 fn declareVariable() {
@@ -399,9 +446,15 @@ fn namedVariable(name: scanner::Token, canAssign: bool) {
 		getOp = .GetLocal
 		setOp = .SetLocal
 	} else {
-		arg = identifierConstant(&name)
-		getOp = .GetGlobal
-		setOp = .SetGlobal
+		arg = current.resolveUpvalue(&name)
+		if arg != -1 {
+			getOp = .GetUpvalue
+			setOp = .SetUpvalue
+		} else {
+			arg = identifierConstant(&name)
+			getOp = .GetGlobal
+			setOp = .SetGlobal
+		}
 	}
 
 	if canAssign && match(.Equal) {
@@ -486,7 +539,12 @@ fn function(ftype: FunctionType) {
 	block()
 
 	function := endCompiler()
-	emitOpAndByte(.Constant, makeConstant(function))
+	emitOpAndByte(.Closure, makeConstant(function))
+
+	for i := 0; i < function.upvalueCount; i++ {
+		emitByte(int(compiler.upvalues[i].isLocal));
+		emitByte(compiler.upvalues[i].index)
+	}
 }
 
 fn funDeclaration() {

@@ -1,10 +1,13 @@
 import (
-	"value.um"
+	"std.um"
+
 	"chunk.um"
+	"common.um"
+	"value.um"
 )
 
 type Function* = struct {
-	arity: uint
+	arity, upvalueCount: uint
 	chunk: chunk::Chunk
 	name: value::String
 }
@@ -19,6 +22,10 @@ fn (f: ^Function) print*() {
 }
 
 fn (f: ^Function) isFalsey*(): bool { return false }
+
+fn (f: ^Function) unlink*() {
+	// they don't have anything to unlink so it's fine
+}
 
 fn (f: ^Function) equals*(v: ^value::Value): bool {
 	o := ^Function(v^); return f == o
@@ -35,7 +42,66 @@ type NativeFunction* = fn(argCount: uint, stack: []value::Value, base: uint): va
 
 fn (f: ^NativeFunction) print*() { printf("<native fn>") }
 fn (f: ^NativeFunction) isFalsey*(): bool { return false }
+fn (f: ^NativeFunction) unlink*() {}
 
 fn (f: ^NativeFunction) equals*(v: ^value::Value): bool {
 	o := ^NativeFunction(v^); return f == o
+}
+
+type Upvalue* = struct {
+	location: ^value::Value
+	slot: uint
+	closed: value::Value
+	next: ^Upvalue
+}
+
+fn (u: ^Upvalue) print*() { std::assert(false) }
+fn (u: ^Upvalue) isFalsey*(): bool { return false }
+
+fn (u: ^Upvalue) equals*(v: ^value::Value): bool {
+	return v.equals(u.location)
+}
+
+fn (u: ^Upvalue) unlink*() {
+	u.location = null
+	u.next = null
+}
+
+fn newUpvalue*(stack: []value::Value, slot: uint): ^Upvalue {
+	u := new(Upvalue)
+	u.location = &stack[slot]
+	u.slot = slot
+	u.closed = value::Nil {}
+	u.next = null
+	return u
+}
+
+type Closure* = struct {
+	function: ^Function
+	upvalues: []^Upvalue
+}
+
+fn (c: ^Closure) print*() { c.function.print() }
+fn (c: ^Closure) isFalsey*(): bool { return false }
+
+fn (c: ^Closure) equals*(v: ^value::Value): bool {
+	// TODO: should I compare the function pointers
+	// or the closure pointers? currently defaulting
+	// to functions
+	return c.function.equals(v)
+}
+
+fn (c: ^Closure) unlink*() {
+	c.function = null
+	for _, u^ in c.upvalues {
+		u^.unlink()
+		u^ = null
+	}
+}
+
+fn newClosure*(function: ^Function): ^Closure {
+	c := new(Closure)
+	c.function = function
+	c.upvalues = make([]^Upvalue, function.upvalueCount)
+	return c
 }

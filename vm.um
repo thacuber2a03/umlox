@@ -33,6 +33,7 @@ type VM = struct {
 	stack: [STACK_MAX]value::Value
 	stackTop: uint
 	globals: map[str]value::Value
+	openUpvalues: ^object::Upvalue
 }
 
 var vm: VM
@@ -44,6 +45,7 @@ fn clock(args: uint, stack: []value::Value, base: uint): value::Value {
 fn resetStack() {
 	vm.stackTop = 0
 	vm.frameCount = 0
+	vm.openUpvalues = null
 }
 
 fn runtimeError(msg: str): InterpretResult {
@@ -116,14 +118,61 @@ fn callValue(callee: value::Value, argCount: uint): bool {
 	return false
 }
 
+fn captureUpvalue(local: uint): ^object::Upvalue {
+	prevUpvalue := ^object::Upvalue(null)
+	upvalue := vm.openUpvalues
+	for upvalue != null && upvalue^.slot > local {
+		prevUpvalue = upvalue
+		upvalue = upvalue.next
+	}
+
+	if upvalue != null && upvalue.slot == local { return upvalue }
+
+	createdUpvalue := object::newUpvalue(vm.stack, local)
+	createdUpvalue.next = upvalue
+
+	if prevUpvalue == null {
+		vm.openUpvalues = createdUpvalue
+	} else {
+		prevUpvalue.next = createdUpvalue
+	}
+
+	return createdUpvalue
+}
+
+fn closeUpvalues(last: uint) {
+	for vm.openUpvalues != null && vm.openUpvalues.slot >= last {
+		upvalue := vm.openUpvalues
+		upvalue.closed = upvalue.location^
+		upvalue.location = &upvalue.closed
+		vm.openUpvalues = upvalue.next
+	}
+}
+
 fn init*() {
 	resetStack()
 	vm.globals = {}
 	vm.globals["clock"] = object::NativeFunction(clock)
 }
 
-fn free*() {
+fn unlinkObjects() {
+	upvalue := vm.openUpvalues
+	for upvalue != null {
+		next := upvalue.next
+		upvalue.unlink()
+		upvalue = next
+	}
+	vm.openUpvalues = null
 
+	for _, v in vm.stack {
+		if u := ^object::Upvalue(v); u != null { u.unlink() }
+		if c := ^object::Closure(v); c != null { c.unlink() }
+		if f := ^object::Function(v); f != null { f.unlink() }
+	}
+}
+
+fn free*() {
+	unlinkObjects()
 }
 
 fn readByte(frame: ^CallFrame): uint8 {
@@ -235,12 +284,21 @@ fn run(): InterpretResult {
 			offset := readByte(frame)
 			vm.stack[frame.slots+offset] = peek(0)^
 
-		case .Less: comparisonOp(0)
-		case .Greater: comparisonOp(1)
+		case .GetUpvalue:
+			slot := readByte(frame)
+			push(frame.closure.upvalues[slot].location^)
+
+		case .SetUpvalue:
+			slot := readByte(frame)
+			// this looks sorta dumb
+			frame.closure.upvalues[slot].location^ = peek(0)^
 
 		case .Equal:
 			b, a := pop(), pop()
 			push(value::Bool(a.equals(&b)))
+
+		case .Greater: comparisonOp(1)
+		case .Less: comparisonOp(0)
 
 		case .Add:
 			b, a := pop(), pop()
@@ -293,9 +351,23 @@ fn run(): InterpretResult {
 			function := ^object::Function(readConstant(frame))
 			closure := object::newClosure(function)
 			push(closure)
+			for i := 0; i < len(closure.upvalues); i++ {
+				isLocal := bool(readByte(frame))
+				index := readByte(frame)
+				if isLocal {
+					closure.upvalues[i] = captureUpvalue(frame.slots + index)
+				} else {
+					closure.upvalues[i] = frame.closure.upvalues[index]
+				}
+			}
+
+		case .CloseUpvalue:
+			closeUpvalues(vm.stackTop - 1)
+			pop()
 
 		case .Return:
 			result := pop()
+			closeUpvalues(frame.slots)
 			vm.frameCount--
 			if vm.frameCount == 0 {
 				pop()
@@ -306,7 +378,7 @@ fn run(): InterpretResult {
 			push(result)
 			frame = &vm.frames[vm.frameCount - 1]
 
-		default: std::assert(false, "Unreachable")
+		default: std::assert(false)
 		}
 	}
 
