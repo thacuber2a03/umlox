@@ -20,7 +20,7 @@ const STACK_MAX* = FRAMES_MAX * common::UINT8_COUNT
 
 // TODO: encode some other way
 type CallFrame = struct {
-	function: ^object::Function
+	closure: ^object::Closure
 	ip: uint
 	slots: uint
 }
@@ -28,7 +28,7 @@ type CallFrame = struct {
 type VM = struct {
 	frames: [FRAMES_MAX]CallFrame
 	frameCount: uint
-	
+
 	ip: uint
 	stack: [STACK_MAX]value::Value
 	stackTop: uint
@@ -51,7 +51,7 @@ fn runtimeError(msg: str): InterpretResult {
 
 	for i := int(vm.frameCount - 1); i >= 0; i-- {
 		frame := &vm.frames[i]
-		function := frame.function
+		function := frame.closure.function
 		instruction := frame.ip - 1
 		fprintf(std::stderr(), "[line %d] in ",
 			function.chunk.lines[instruction])
@@ -80,12 +80,13 @@ fn peek(distance: int): ^value::Value {
 	return &vm.stack[vm.stackTop-1 - distance]
 }
 
-fn call(function: ^object::Function, argCount: uint): bool {
-	if argCount != function.arity {
-		runtimeError(sprintf("Expected %d arguments but got %d.", function.arity, argCount))
+fn call(closure: ^object::Closure, argCount: uint): bool {
+	if argCount != closure.function.arity {
+		runtimeError(sprintf("Expected %d arguments but got %d.",
+			closure.function.arity, argCount))
 		return false
 	}
-	
+
 	if vm.frameCount == FRAMES_MAX {
 		runtimeError("Stack overflow.")
 		return false
@@ -93,14 +94,14 @@ fn call(function: ^object::Function, argCount: uint): bool {
 
 	frame := &vm.frames[vm.frameCount]
 	vm.frameCount++
-	frame.function = function
+	frame.closure = closure
 	frame.ip = 0
 	frame.slots = vm.stackTop - argCount - 1
 	return true
 }
 
 fn callValue(callee: value::Value, argCount: uint): bool {
-	if f := ^object::Function(callee); f != null {
+	if f := ^object::Closure(callee); f != null {
 		return call(f, argCount)
 	}
 
@@ -126,7 +127,7 @@ fn free*() {
 }
 
 fn readByte(frame: ^CallFrame): uint8 {
-	b := frame.function.chunk.code[frame.ip]
+	b := frame.closure.function.chunk.code[frame.ip]
 	frame.ip++
 	return b
 }
@@ -136,13 +137,14 @@ fn readOpCode(frame: ^CallFrame): chunk::OpCode {
 }
 
 fn readConstant(frame: ^CallFrame): value::Value {
-	return frame.function.chunk.constants[readByte(frame)]
+	// jeez
+	return frame.closure.function.chunk.constants[readByte(frame)]
 }
 
 fn readShort(frame: ^CallFrame): uint16 {
 	frame.ip += 2
-	return (frame.function.chunk.code[frame.ip-2] << 8) |
-	        frame.function.chunk.code[frame.ip-1]
+	return (frame.closure.function.chunk.code[frame.ip-2] << 8) |
+	        frame.closure.function.chunk.code[frame.ip-1]
 }
 
 fn binaryOp(op: uint): InterpretResult {
@@ -193,7 +195,7 @@ fn run(): InterpretResult {
 			}
 			printf("\n")
 
-			debug::disassembleInstruction(&frame.function.chunk, frame.ip)
+			debug::disassembleInstruction(&frame.closure.function.chunk, frame.ip)
 		}
 
 		switch ins := readOpCode(frame); ins {
@@ -256,7 +258,7 @@ fn run(): InterpretResult {
 		case .Divide: if binaryOp(2) != .Ok { return .RuntimeError }
 
 		case .Negate:
-			if n := ^value::Number(peek(0)^); n != null {
+			if n := ^value::Number(peek(0)^); n == null {
 				return runtimeError("Operand must be a number.")
 			}
 
@@ -287,6 +289,11 @@ fn run(): InterpretResult {
 			}
 			frame = &vm.frames[vm.frameCount - 1]
 
+		case .Closure:
+			function := ^object::Function(readConstant(frame))
+			closure := object::newClosure(function)
+			push(closure)
+
 		case .Return:
 			result := pop()
 			vm.frameCount--
@@ -309,9 +316,12 @@ fn run(): InterpretResult {
 fn interpret*(source: str): InterpretResult {
 	function := compiler::compile(source)
 	if function == null { return .CompileError }
-	
+
 	push(function)
-	call(function, 0)
+	closure := object::newClosure(function)
+	pop()
+	push(closure)
+	call(closure, 0)
 
 	return run()
 }
