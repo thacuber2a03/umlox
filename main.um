@@ -64,7 +64,7 @@ fn main() {
 	} else if argc == 2 {
 		runFile(std::argv(1))
 	} else {
-		fprintf(std::stderr(), "Usage: clox [path]")
+		fprintf(std::stderr(), "Usage: umlox [path]")
 		exit(64)
 	}
 
