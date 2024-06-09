@@ -36,9 +36,17 @@ fn repl() {
 
 fn runFile(path: str) {
 	f, e := std::fopen(path, "rb")
-	std::exitif(e)
+	if e.code != 0 {
+		fprintf(std::stderr(), "Could not open file \"%s\".\n", path)
+		exit(74)
+	}
+	
 	source, e := std::freadall(f)
-	std::exitif(e)
+	if e.code != 0 {
+		fprintf(std::stderr(), "Could not read file \"%s\".\n", path)
+		exit(74)
+	}
+
 	std::fclose(f)
 
 	switch res := vm::interpret(source); res {
