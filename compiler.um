@@ -357,7 +357,7 @@ fn defineVariable(global: uint8) {
 	emitOpAndByte(.DefineGlobal, global)
 }
 
-fn argumentList(): uint8 {
+fn argumentList(): uint {
 	argCount := 0
 	if !check(.RightParen) {
 		for true {
@@ -402,7 +402,7 @@ fn binary(_: bool) {
 
 fn call(_: bool) {
 	argCount := argumentList()
-	emitOpAndByte(.Call, argCount)
+	emitOpAndByte(.Call, argCount & 0xff)
 }
 
 fn literal(_: bool) {
