@@ -155,24 +155,8 @@ fn init*() {
 	vm.globals["clock"] = object::NativeFunction(clock)
 }
 
-fn unlinkObjects() {
-	upvalue := vm.openUpvalues
-	for upvalue != null {
-		next := upvalue.next
-		upvalue.unlink()
-		upvalue = next
-	}
-	vm.openUpvalues = null
-
-	for _, v in vm.stack {
-		if u := ^object::Upvalue(v); u != null { u.unlink() }
-		if c := ^object::Closure(v); c != null { c.unlink() }
-		if f := ^object::Function(v); f != null { f.unlink() }
-	}
-}
-
 fn free*() {
-	unlinkObjects()
+	object::unlinkAllObjects()
 }
 
 fn readByte(frame: ^CallFrame): uint8 {

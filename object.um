@@ -6,6 +6,8 @@ import (
 	"value.um"
 )
 
+var allObjects: []value::Value
+
 type Function* = struct {
 	arity, upvalueCount: uint
 	chunk: chunk::Chunk
@@ -22,11 +24,7 @@ fn (f: ^Function) print*() {
 }
 
 fn (f: ^Function) isFalsey*(): bool { return false }
-
-fn (f: ^Function) unlink*() {
-	// they don't have anything to unlink so it's fine
-}
-
+fn (f: ^Function) unlink*() { f.chunk.unlink() }
 fn (f: ^Function) equals*(v: ^value::Value): bool {
 	o := ^Function(v^); return f == o
 }
@@ -34,6 +32,7 @@ fn (f: ^Function) equals*(v: ^value::Value): bool {
 fn newFunction*(): ^Function {
 	f := new(Function)
 	f.chunk.init()
+	allObjects = append(allObjects, f)
 	return f
 }
 
@@ -63,8 +62,18 @@ fn (u: ^Upvalue) equals*(v: ^value::Value): bool {
 }
 
 fn (u: ^Upvalue) unlink*() {
-	u.location = null
-	u.next = null
+	if u.location != null && valid(u.location^) {
+		v := u.location^
+		u.location = null
+		v.unlink()
+	}
+
+	if valid(u.closed) { u.closed.unlink() }
+
+	if u.next != null {
+		u.next.unlink()
+		u.next = null
+	}
 }
 
 fn newUpvalue*(stack: []value::Value, slot: uint): ^Upvalue {
@@ -73,6 +82,7 @@ fn newUpvalue*(stack: []value::Value, slot: uint): ^Upvalue {
 	u.slot = slot
 	u.closed = value::Nil {}
 	u.next = null
+	allObjects = append(allObjects, u)
 	return u
 }
 
@@ -93,9 +103,11 @@ fn (c: ^Closure) equals*(v: ^value::Value): bool {
 
 fn (c: ^Closure) unlink*() {
 	c.function = null
-	for _, u^ in c.upvalues {
-		u^.unlink()
-		u^ = null
+	for true {
+		if len(c.upvalues) == 0 { break }
+		v := c.upvalues[len(c.upvalues)-1]
+		delete(c.upvalues, len(c.upvalues)-1)
+		v.unlink()
 	}
 }
 
@@ -103,5 +115,15 @@ fn newClosure*(function: ^Function): ^Closure {
 	c := new(Closure)
 	c.function = function
 	c.upvalues = make([]^Upvalue, function.upvalueCount)
+	allObjects = append(allObjects, c)
 	return c
+}
+
+fn unlinkAllObjects*() {
+	for true {
+		if len(allObjects) == 0 { break }
+		v := allObjects[len(allObjects)-1]
+		delete(allObjects, len(allObjects)-1)
+		v.unlink()
+	}
 }

@@ -47,8 +47,6 @@ fn (c: ^Chunk) init*() {
 	c.lines = make([]uint, 0)
 }
 
-// freeing is dealt with by just getting out of the scope
-
 fn (c: ^Chunk) writeByte*(byte: uint8, line: uint) {
 	c.code = append(c.code, byte)
 	c.lines = append(c.lines, line)
@@ -61,6 +59,10 @@ fn (c: ^Chunk) writeOpCode*(op: OpCode, line: uint) {
 fn (c: ^Chunk) addConstant*(v: value::Value): uint {
 	c.constants = append(c.constants, v)
 	return len(c.constants) - 1
+}
+
+fn (c: ^Chunk) unlink*() {
+	for _, c in c.constants { c.unlink() }
 }
 
 fn (c: ^Chunk) length*(): uint { return len(c.code) }

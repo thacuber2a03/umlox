@@ -1,4 +1,12 @@
 {
-	var a = 1;
-	fun b() { return a; }
+	var a = 10;
+
+	fun repeat() {
+		if (a == 0) return;
+		print a;
+		a = a - 1;
+		repeat();
+	}
+
+	repeat();
 }
